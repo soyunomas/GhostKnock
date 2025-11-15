@@ -1,0 +1,28 @@
+# Configuración del servidor GhostKnockd
+listener:
+  interface: "any" # 'any' para todas, o una específica como 'eth0', 'en0'
+  port: 3001
+
+# Lista de usuarios autorizados y sus permisos
+users:
+  - name: "admin_laptop"
+    # Pega aquí la clave pública Base64 generada por ghostknock-keygen
+    public_key: "PKKqGXzisWXn29dWFpFMoA8m+50C2RPY1Wz1m2xoTvw="
+    # Lista de acciones que este usuario puede solicitar
+    actions:
+      - "create-test-file"
+
+  - name: "dev_workstation"
+    public_key: "PKKqGXzisWXn29dWFpFMoA8m+50C2RPY1Wz1m2xoTvw=" # <-- RECUERDA CAMBIAR ESTA
+    actions:
+      - "create-test-file"
+
+# Definición de las plantillas de comandos para cada acción.
+actions:
+  "create-test-file":
+    # CORRECCIÓN: Usamos comillas dobles (\") para que el shell expanda $(date).
+    command: "echo \"Knock válido de {{.SourceIP}} recibido a las $(date)\" > /tmp/ghostknock_success.txt"
+    # Comando para limpiar el archivo de prueba.
+    revert_command: "rm /tmp/ghostknock_success.txt"
+    # Revertimos la acción rápidamente para la prueba, después de 15 segundos.
+    revert_delay_seconds: 15
