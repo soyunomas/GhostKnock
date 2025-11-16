@@ -28,6 +28,32 @@ listener:
   # listen_ip: "192.168.1.100"
 
 # ------------------------------------------------------------------------------
+# Configuración de Logging
+# ------------------------------------------------------------------------------
+# Controla la verbosidad y el formato de los registros del servidor.
+logging:
+  # Nivel de verbosidad de los logs.
+  # Valores válidos: "debug", "info", "warn", "error".
+  # - "debug": Muy verboso, útil para depurar problemas.
+  # - "info":  Nivel por defecto, registra eventos importantes.
+  # - "warn":  Registra advertencias que no son errores críticos.
+  # - "error": Solo registra errores graves.
+  log_level: "info"
+
+# ------------------------------------------------------------------------------
+# Configuración del Demonio
+# ------------------------------------------------------------------------------
+# Opciones que controlan el comportamiento del proceso del servidor.
+daemon:
+  # (OPCIONAL) Ruta para crear un archivo PID.
+  # Si se especifica, GhostKnockd escribirá su ID de proceso en este archivo
+  # al iniciar y lo eliminará al detenerse limpiamente.
+  # Esto es muy útil para la integración con systemd, monit, u otros scripts.
+  # El directorio debe ser escribible por el usuario que ejecuta el demonio.
+  pid_file: "/var/run/ghostknockd.pid"
+
+
+# ------------------------------------------------------------------------------
 # Configuración de Usuarios y Permisos
 # ------------------------------------------------------------------------------
 # Lista de clientes autorizados para enviar knocks.

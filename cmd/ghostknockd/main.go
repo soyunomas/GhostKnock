@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv" // <<-- NUEVA IMPORTACIÓN
 	"sync"
 	"syscall"
 	"time"
@@ -47,6 +48,17 @@ type Server struct {
 }
 
 func main() {
+	configFile := flag.String("config", "config.yaml", "Ruta al archivo de configuración YAML")
+	flag.Parse()
+
+	// Cargar la configuración ANTES de inicializar el logger final.
+	tempLogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	cfg, err := config.LoadConfig(*configFile)
+	if err != nil {
+		tempLogger.Error("Error crítico al cargar la configuración", "file", *configFile, "error", err)
+		os.Exit(1)
+	}
+
 	// --- INICIALIZACIÓN DEL LOGGER ESTRUCTURADO A ARCHIVO ---
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -54,24 +66,52 @@ func main() {
 	}
 	defer logFile.Close()
 
-	logger := slog.New(slog.NewTextHandler(logFile, nil))
-	slog.SetDefault(logger)
-	// --------------------------------------------------------
+	var logLevel slog.Level
+	switch cfg.Logging.LogLevel {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "info":
+		logLevel = slog.LevelInfo
+	case "warn":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	default:
+		logLevel = slog.LevelInfo
+	}
 
-	configFile := flag.String("config", "config.yaml", "Ruta al archivo de configuración YAML")
-	flag.Parse()
+	handlerOpts := &slog.HandlerOptions{Level: logLevel}
+	logger := slog.New(slog.NewTextHandler(logFile, handlerOpts))
+	slog.SetDefault(logger)
 
 	slog.Info("Iniciando demonio GhostKnockd...")
 
-	cfg, err := config.LoadConfig(*configFile)
-	if err != nil {
-		slog.Error("Error al cargar la configuración", "error", err)
-		os.Exit(1)
+	// --- GESTIÓN DEL ARCHIVO PID ---
+	if cfg.Daemon.PIDFile != "" {
+		pid := os.Getpid()
+		pidStr := strconv.Itoa(pid)
+		if err := os.WriteFile(cfg.Daemon.PIDFile, []byte(pidStr), 0644); err != nil {
+			slog.Error("No se pudo escribir el archivo PID", "path", cfg.Daemon.PIDFile, "error", err)
+			os.Exit(1)
+		}
+		slog.Info("Archivo PID creado", "path", cfg.Daemon.PIDFile, "pid", pid)
+
+		// Usamos defer para asegurar que el archivo PID se elimina al salir de main.
+		defer func() {
+			if err := os.Remove(cfg.Daemon.PIDFile); err != nil {
+				slog.Warn("No se pudo eliminar el archivo PID al salir", "path", cfg.Daemon.PIDFile, "error", err)
+			} else {
+				slog.Info("Archivo PID eliminado", "path", cfg.Daemon.PIDFile)
+			}
+		}()
 	}
+	// ------------------------------------
+
 	slog.Info(
 		"Configuración cargada con éxito",
 		"users_count", len(cfg.Users),
 		"actions_count", len(cfg.Actions),
+		"log_level", cfg.Logging.LogLevel,
 	)
 
 	server := &Server{
@@ -92,7 +132,6 @@ func main() {
 	go server.startLimiterCleaner()
 
 	packetsCh := make(chan listener.PacketInfo)
-	// <<-- CAMBIO: Pasamos la struct de configuración del listener completa.
 	go listener.Start(ctx, cfg.Listener, packetsCh)
 
 	slog.Info("El listener está activo, procesando knocks y esperando señales...")

@@ -5,11 +5,21 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
-	"net" // <<-- NUEVA IMPORTACIÓN
+	"net"
 	"os"
 
 	"gopkg.in/yaml.v3"
 )
+
+// Daemon define la configuración del comportamiento del proceso del servidor.
+type Daemon struct {
+	PIDFile string `yaml:"pid_file,omitempty"`
+}
+
+// Logging define la configuración para los registros del servidor.
+type Logging struct {
+	LogLevel string `yaml:"log_level"`
+}
 
 // Action define una plantilla de comando y su comportamiento de reversión.
 type Action struct {
@@ -21,6 +31,8 @@ type Action struct {
 // Config es la estructura raíz de nuestro archivo de configuración.
 type Config struct {
 	Listener Listener          `yaml:"listener"`
+	Logging  Logging           `yaml:"logging"`
+	Daemon   Daemon            `yaml:"daemon"`
 	Users    []User            `yaml:"users"`
 	Actions  map[string]Action `yaml:"actions"`
 }
@@ -29,7 +41,7 @@ type Config struct {
 type Listener struct {
 	Interface string `yaml:"interface"`
 	Port      int    `yaml:"port"`
-	ListenIP  string `yaml:"listen_ip,omitempty"` // <<-- NUEVO CAMPO
+	ListenIP  string `yaml:"listen_ip,omitempty"`
 }
 
 // User define un usuario autorizado.
@@ -68,12 +80,24 @@ func validateConfig(cfg *Config) error {
 	if cfg.Listener.Interface == "" {
 		return fmt.Errorf("la interfaz de escucha no puede estar vacía")
 	}
-	// <<-- NUEVA VALIDACIÓN
 	if cfg.Listener.ListenIP != "" {
 		if net.ParseIP(cfg.Listener.ListenIP) == nil {
 			return fmt.Errorf("el campo 'listen_ip' ('%s') no es una dirección IP válida", cfg.Listener.ListenIP)
 		}
 	}
+
+	// Validación para la configuración de logging.
+	if cfg.Logging.LogLevel == "" {
+		// Asignar un valor por defecto si no se especifica.
+		cfg.Logging.LogLevel = "info"
+	}
+	switch cfg.Logging.LogLevel {
+	case "debug", "info", "warn", "error":
+		// El valor es válido, no hacer nada.
+	default:
+		return fmt.Errorf("el valor de 'log_level' ('%s') es inválido; debe ser 'debug', 'info', 'warn' o 'error'", cfg.Logging.LogLevel)
+	}
+
 	if len(cfg.Users) == 0 {
 		return fmt.Errorf("no se han definido usuarios en la sección 'users'")
 	}
