@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/user" // <<-- NUEVA IMPORTACIÓN
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +27,9 @@ type Action struct {
 	Command            string `yaml:"command"`
 	RevertCommand      string `yaml:"revert_command"`
 	RevertDelaySeconds int    `yaml:"revert_delay_seconds"`
+	TimeoutSeconds     int    `yaml:"timeout_seconds,omitempty"`
+	CooldownSeconds    int    `yaml:"cooldown_seconds,omitempty"`
+	RunAsUser          string `yaml:"run_as_user,omitempty"` // <<-- NUEVO CAMPO
 }
 
 // Config es la estructura raíz de nuestro archivo de configuración.
@@ -134,6 +138,24 @@ func validateConfig(cfg *Config) error {
 				return fmt.Errorf("el usuario '%s' tiene la acción duplicada: '%s'", user.Name, action)
 			}
 			actionSet[action] = struct{}{}
+		}
+	}
+
+	for actionName, action := range cfg.Actions {
+		if action.TimeoutSeconds < 0 {
+			return fmt.Errorf("la acción '%s' tiene un 'timeout_seconds' negativo, lo cual no está permitido", actionName)
+		}
+		if action.CooldownSeconds < 0 {
+			return fmt.Errorf("la acción '%s' tiene un 'cooldown_seconds' negativo, lo cual no está permitido", actionName)
+		}
+		// <<-- NUEVA VALIDACIÓN
+		if action.RunAsUser != "" {
+			if action.RunAsUser == "root" {
+				return fmt.Errorf("la acción '%s' tiene 'run_as_user' configurado como 'root', lo cual está prohibido por seguridad", actionName)
+			}
+			if _, err := user.Lookup(action.RunAsUser); err != nil {
+				return fmt.Errorf("la acción '%s' especifica 'run_as_user' con un usuario ('%s') que no existe en el sistema: %w", actionName, action.RunAsUser, err)
+			}
 		}
 	}
 

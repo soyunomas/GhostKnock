@@ -215,7 +215,7 @@ actions:
     *   [x] **A nivel de Servidor:**
         *   `log_level`: Para poder ajustar la verbosidad de los logs (debug, info, warn) desde la configuración, sin necesidad de recompilar.
         *   `pid_file`: Para generar un archivo PID, facilitando la integración con scripts de monitorización y gestión de servicios (`systemd`, `monit`, etc.).
-    *   [ ] **A nivel de Acción:**
+    *   [x] **A nivel de Acción:**
         *   `timeout_seconds`: Para terminar automáticamente comandos que se cuelgan, previniendo procesos zombie y liberando recursos del sistema.
         *   `cooldown_seconds` (por acción): Para definir un enfriamiento específico por acción, permitiendo políticas de seguridad más granulares para operaciones críticas.
         *   `run_as_user`: Para ejecutar comandos con privilegios reducidos, aplicando el principio de mínimo privilegio y reduciendo drásticamente la superficie de ataque.

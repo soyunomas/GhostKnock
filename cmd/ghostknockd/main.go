@@ -11,7 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strconv" // <<-- NUEVA IMPORTACIÓN
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -25,7 +25,7 @@ import (
 
 const (
 	replayWindowSeconds      = 5
-	actionCooldownSeconds    = 15
+	actionCooldownSeconds    = 15 // <<-- ESTE ES AHORA EL COOLDOWN GLOBAL POR DEFECTO
 	cacheCleanupInterval     = 1 * time.Minute
 	rateLimitEventsPerSecond = 1.0
 	rateLimitBurst           = 3
@@ -194,7 +194,8 @@ func (s *Server) startCacheCleaner() {
 	for range ticker.C {
 		s.cacheMutex.Lock()
 		purgedCount := 0
-		expirationDuration := time.Duration(actionCooldownSeconds) * time.Second
+		// Usamos un umbral de limpieza generoso, por ejemplo, el doble del cooldown por defecto.
+		expirationDuration := time.Duration(actionCooldownSeconds*2) * time.Second
 		for key, lastSeen := range s.actionCooldowns {
 			if time.Since(lastSeen) > expirationDuration {
 				delete(s.actionCooldowns, key)
@@ -258,25 +259,44 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
-	cooldownKey := fmt.Sprintf("%s:%s", authorizedUser.PublicKeyB64, payload.ActionID)
-	s.cacheMutex.RLock()
-	lastExecutionTime, onCooldown := s.actionCooldowns[cooldownKey]
-	s.cacheMutex.RUnlock()
+	// --- LÓGICA DE COOLDOWN DINÁMICO ---
+	actionDef, ok := s.config.Actions[payload.ActionID]
+	if !ok {
+		slog.Error("Inconsistencia de configuración: la acción autorizada no existe", "action_id", payload.ActionID)
+		return
+	}
 
-	if onCooldown {
-		elapsed := time.Since(lastExecutionTime)
-		if elapsed < (time.Duration(actionCooldownSeconds) * time.Second) {
-			remaining := (time.Duration(actionCooldownSeconds) * time.Second) - elapsed
-			slog.Warn(
-				"Acción descartada",
-				"reason", "cooldown_active",
-				"user", authorizedUser.Name,
-				"action_id", payload.ActionID,
-				"remaining_seconds", remaining.Seconds(),
-			)
-			return
+	// Determinar el período de cooldown efectivo.
+	// Por defecto es el global. Si la acción tiene uno >= 0, este lo sobreescribe.
+	effectiveCooldown := time.Duration(actionCooldownSeconds) * time.Second
+	if actionDef.CooldownSeconds >= 0 {
+		effectiveCooldown = time.Duration(actionDef.CooldownSeconds) * time.Second
+	}
+
+	cooldownKey := fmt.Sprintf("%s:%s", authorizedUser.PublicKeyB64, payload.ActionID)
+
+	// Solo realizamos la comprobación si el cooldown es mayor que cero.
+	if effectiveCooldown > 0 {
+		s.cacheMutex.RLock()
+		lastExecutionTime, onCooldown := s.actionCooldowns[cooldownKey]
+		s.cacheMutex.RUnlock()
+
+		if onCooldown {
+			elapsed := time.Since(lastExecutionTime)
+			if elapsed < effectiveCooldown {
+				remaining := effectiveCooldown - elapsed
+				slog.Warn(
+					"Acción descartada",
+					"reason", "cooldown_active",
+					"user", authorizedUser.Name,
+					"action_id", payload.ActionID,
+					"remaining_seconds", remaining.Seconds(),
+				)
+				return
+			}
 		}
 	}
+	// ------------------------------------
 
 	s.cacheMutex.Lock()
 	s.actionCooldowns[cooldownKey] = time.Now()
@@ -288,11 +308,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		"action_id", payload.ActionID,
 	)
 
-	actionDef, ok := s.config.Actions[payload.ActionID]
-	if !ok {
-		slog.Error("Inconsistencia de configuración: la acción autorizada no existe", "action_id", payload.ActionID)
-		return
-	}
 	if err := executor.Execute(actionDef, packetInfo.SourceIP); err != nil {
 		slog.Error("Falló la ejecución de la acción", "action_id", payload.ActionID, "user", authorizedUser.Name, "error", err)
 	}

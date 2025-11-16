@@ -23,7 +23,7 @@ listener:
   # Por defecto, si se omite esta línea, GhostKnock procesará los knocks
   # dirigidos a CUALQUIER dirección IP asignada a la interfaz especificada.
   # Si define una IP aquí, solo se procesarán los knocks enviados
-  # explícitamente a esa dirección IP de destino.
+  # explícimanente a esa dirección IP de destino.
   # Esto es útil en servidores con múltiples IPs en una misma interfaz.
   # listen_ip: "192.168.1.100"
 
@@ -61,7 +61,7 @@ users:
   - name: "admin_laptop"
     # La clave pública en formato Base64, generada por `ghostknock-keygen`.
     # Cada usuario DEBE tener una clave única.
-    public_key: "PEGA_AQUI_LA_CLAVE_PUBLICA_DEL_ADMINISTRADOR"
+    public_key: "UYNBBmAIaDOatBurz96BKIBixceO1z46WCmkcWzrdfw="
 
     # (OPCIONAL, RECOMENDADO) Lista de IPs o rangos CIDR permitidos para este usuario.
     # Si se define, un knock válido solo será aceptado si proviene de una de estas IPs.
@@ -75,11 +75,14 @@ users:
     actions:
       - "open-ssh-port"
       - "restart-webserver"
+      - "long-running-task"
+      - "clear-app-cache"
 
   - name: "dev_workstation"
-    public_key: "PEGA_AQUI_LA_CLAVE_PUBLICA_DEL_DESARROLLADOR"
+    public_key: "UYNBBmAIaDOatBurz96BKIBixceO1z46WCmkcWzrdfw="
     actions:
       - "create-test-file"
+#     - "trigger-backup"
 
 # ------------------------------------------------------------------------------
 # Definición de Acciones Disponibles
@@ -87,24 +90,42 @@ users:
 # Un mapa de todas las acciones que el servidor puede ejecutar.
 actions:
   "open-ssh-port":
-    # El comando a ejecutar en el shell.
-    # Puede usar plantillas de Go. {{.SourceIP}} se reemplazará por la IP del cliente.
     command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
-
-    # (OPCIONAL) Un comando que revierte la acción principal.
     revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
-
-    # (OPCIONAL) Segundos a esperar antes de ejecutar el comando de reversión.
-    # Si es 0 o se omite, la reversión no se programa.
-    revert_delay_seconds: 300 # La regla de firewall se elimina tras 5 minutos.
+    revert_delay_seconds: 300
+    # Esta acción necesita privilegios de root, por lo que NO se define 'run_as_user'.
+    # El demonio ghostknockd (ejecutado como root) la ejecutará como root.
 
   "restart-webserver":
     command: "systemctl restart nginx"
-    # No todas las acciones tienen una reversión lógica.
     revert_command: ""
-    revert_delay_seconds: 0
+    timeout_seconds: 15
+    cooldown_seconds: 60
+
+  "trigger-backup":
+    command: "/usr/local/bin/backup.sh"
+    timeout_seconds: 600
+    cooldown_seconds: 3600
 
   "create-test-file":
     command: "echo \"Knock válido de {{.SourceIP}} a las $(date)\" > /tmp/ghostknock_success.txt"
     revert_command: "rm /tmp/ghostknock_success.txt"
     revert_delay_seconds: 60
+    cooldown_seconds: 0
+    # (OPCIONAL) Usuario del sistema como el cual se ejecutará el comando.
+    # Esto aplica el principio de mínimo privilegio. El usuario debe existir.
+    # Prohibido usar 'root'.
+    run_as_user: "nobody"
+
+  "long-running-task":
+    command: "echo 'Iniciando tarea larga...' && sleep 10 && echo 'Tarea finalizada (no deberías ver esto)'"
+    timeout_seconds: 3
+
+  "clear-app-cache":
+    command: "rm -rf /var/www/my-app/cache/*"
+    # Este comando es peligroso si se ejecuta como root. Al ejecutarlo como
+    # el usuario del servidor web, limitamos el daño potencial solo a los
+    # archivos que ese usuario posee.
+    run_as_user: "www-data"
+    timeout_seconds: 5
+    cooldown_seconds: 10
