@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/user" // <<-- NUEVA IMPORTACIÓN
+	"os/user"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,7 +29,7 @@ type Action struct {
 	RevertDelaySeconds int    `yaml:"revert_delay_seconds"`
 	TimeoutSeconds     int    `yaml:"timeout_seconds,omitempty"`
 	CooldownSeconds    int    `yaml:"cooldown_seconds,omitempty"`
-	RunAsUser          string `yaml:"run_as_user,omitempty"` // <<-- NUEVO CAMPO
+	RunAsUser          string `yaml:"run_as_user,omitempty"`
 }
 
 // Config es la estructura raíz de nuestro archivo de configuración.
@@ -53,7 +53,9 @@ type User struct {
 	Name             string   `yaml:"name"`
 	PublicKeyB64     string   `yaml:"public_key"`
 	AllowedActions   []string `yaml:"actions"`
+	SourceIPs        []string `yaml:"source_ips,omitempty"` // <<-- NUEVO CAMPO
 	DecodedPublicKey ed25519.PublicKey
+	SourceCIDRs      []*net.IPNet // Campo interno para redes pre-parseadas
 }
 
 // LoadConfig lee y parsea el archivo de configuración YAML desde la ruta especificada.
@@ -139,6 +141,18 @@ func validateConfig(cfg *Config) error {
 			}
 			actionSet[action] = struct{}{}
 		}
+		
+		// <<-- NUEVA VALIDACIÓN PARA SOURCE_IPS
+		if len(user.SourceIPs) > 0 {
+			user.SourceCIDRs = make([]*net.IPNet, 0, len(user.SourceIPs))
+			for _, ipStr := range user.SourceIPs {
+				_, cidr, err := net.ParseCIDR(ipStr)
+				if err != nil {
+					return fmt.Errorf("el usuario '%s' tiene una IP/CIDR inválida en 'source_ips': '%s'. Asegúrese de usar la notación CIDR (ej. '1.2.3.4/32' o '192.168.1.0/24'): %w", user.Name, ipStr, err)
+				}
+				user.SourceCIDRs = append(user.SourceCIDRs, cidr)
+			}
+		}
 	}
 
 	for actionName, action := range cfg.Actions {
@@ -148,7 +162,6 @@ func validateConfig(cfg *Config) error {
 		if action.CooldownSeconds < 0 {
 			return fmt.Errorf("la acción '%s' tiene un 'cooldown_seconds' negativo, lo cual no está permitido", actionName)
 		}
-		// <<-- NUEVA VALIDACIÓN
 		if action.RunAsUser != "" {
 			if action.RunAsUser == "root" {
 				return fmt.Errorf("la acción '%s' tiene 'run_as_user' configurado como 'root', lo cual está prohibido por seguridad", actionName)

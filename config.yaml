@@ -66,9 +66,10 @@ users:
     # (OPCIONAL, RECOMENDADO) Lista de IPs o rangos CIDR permitidos para este usuario.
     # Si se define, un knock válido solo será aceptado si proviene de una de estas IPs.
     # Es una capa de seguridad adicional muy potente.
-    # source_ips:
-    #   - "84.120.30.45/32"  # IP estática de la oficina
-    #   - "192.168.1.0/24"    # Red local de casa
+    # IMPORTANTE: Se debe usar la notación CIDR completa.
+    source_ips:
+      - "84.120.30.45/32"  # IP estática de la oficina
+      - "192.168.1.0/24"    # Red local de casa
 
     # Lista de identificadores de acciones que este usuario tiene permitido ejecutar.
     # Estos deben coincidir con una de las acciones definidas en la sección "actions".
@@ -80,9 +81,11 @@ users:
 
   - name: "dev_workstation"
     public_key: "UYNBBmAIaDOatBurz96BKIBixceO1z46WCmkcWzrdfw="
+    # Este usuario no tiene `source_ips`, por lo que puede enviar knocks desde cualquier IP.
     actions:
       - "create-test-file"
 #     - "trigger-backup"
+
 
 # ------------------------------------------------------------------------------
 # Definición de Acciones Disponibles

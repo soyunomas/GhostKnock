@@ -239,12 +239,12 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 
 	var authorizedUser *config.User
 	var isSignatureValid bool
-	for _, user := range s.config.Users {
+	for i := range s.config.Users {
+		user := &s.config.Users[i]
 		if ed25519.Verify(user.DecodedPublicKey, serializedPayload, signature) {
 			isSignatureValid = true
 			if isActionAllowed(payload.ActionID, user.AllowedActions) {
-				u := user
-				authorizedUser = &u
+				authorizedUser = user
 				break
 			}
 		}
@@ -257,6 +257,26 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	if authorizedUser == nil {
 		slog.Warn("Paquete descartado", "reason", "unauthorized_action", "source_ip", packetInfo.SourceIP.String(), "action_id", payload.ActionID)
 		return
+	}
+
+	// <<-- NUEVA COMPROBACIÓN DE IP DE ORIGEN
+	if len(authorizedUser.SourceCIDRs) > 0 {
+		isIPAllowed := false
+		for _, cidr := range authorizedUser.SourceCIDRs {
+			if cidr.Contains(packetInfo.SourceIP) {
+				isIPAllowed = true
+				break
+			}
+		}
+		if !isIPAllowed {
+			slog.Warn("Paquete descartado",
+				"reason", "unauthorized_source_ip",
+				"user", authorizedUser.Name,
+				"action_id", payload.ActionID,
+				"source_ip", packetInfo.SourceIP.String(),
+			)
+			return
+		}
 	}
 
 	// --- LÓGICA DE COOLDOWN DINÁMICO ---

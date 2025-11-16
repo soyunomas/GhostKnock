@@ -211,7 +211,7 @@ actions:
 
 *   [x] Makefile para automatizar compilación e instalación.
 *   [ ] Configuración del cliente mejorada (buscar claves en `~/.config/ghostknock/`).
-*   [ ] **Implementar opciones de configuración avanzadas para robustez y seguridad:**
+*   [x] **Implementar opciones de configuración avanzadas para robustez y seguridad:**
     *   [x] **A nivel de Servidor:**
         *   `log_level`: Para poder ajustar la verbosidad de los logs (debug, info, warn) desde la configuración, sin necesidad de recompilar.
         *   `pid_file`: Para generar un archivo PID, facilitando la integración con scripts de monitorización y gestión de servicios (`systemd`, `monit`, etc.).
@@ -219,7 +219,7 @@ actions:
         *   `timeout_seconds`: Para terminar automáticamente comandos que se cuelgan, previniendo procesos zombie y liberando recursos del sistema.
         *   `cooldown_seconds` (por acción): Para definir un enfriamiento específico por acción, permitiendo políticas de seguridad más granulares para operaciones críticas.
         *   `run_as_user`: Para ejecutar comandos con privilegios reducidos, aplicando el principio de mínimo privilegio y reduciendo drásticamente la superficie de ataque.
-    *   [ ] **A nivel de Usuario:**
+    *   [x] **A nivel de Usuario:**
         *   `source_ips`: Para restringir desde qué direcciones IP puede operar un usuario, añadiendo una capa de seguridad crucial que ata una clave criptográfica a una ubicación de red.
 *   [ ] Empaquetado (Systemd service, .deb/.rpm).
 
