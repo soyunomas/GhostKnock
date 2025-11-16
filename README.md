@@ -212,7 +212,7 @@ actions:
 *   [x] Makefile para automatizar compilación e instalación.
 *   [ ] Configuración del cliente mejorada (buscar claves en `~/.config/ghostknock/`).
 *   [ ] **Implementar opciones de configuración avanzadas para robustez y seguridad:**
-    *   [ ] **A nivel de Servidor:**
+    *   [x] **A nivel de Servidor:**
         *   `log_level`: Para poder ajustar la verbosidad de los logs (debug, info, warn) desde la configuración, sin necesidad de recompilar.
         *   `pid_file`: Para generar un archivo PID, facilitando la integración con scripts de monitorización y gestión de servicios (`systemd`, `monit`, etc.).
     *   [ ] **A nivel de Acción:**
