@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+# La condición 'if' asegura que esto solo se ejecute en la desinstalación completa,
+# no antes de una actualización.
+if [ "$1" = "remove" ]; then
+    echo "Deteniendo y deshabilitando el servicio ghostknockd..."
+    # '|| true' evita que el script falle si el servicio ya estaba detenido.
+    systemctl stop ghostknockd.service || true
+    systemctl disable ghostknockd.service || true
+fi
+
+exit 0

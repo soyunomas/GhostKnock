@@ -1,0 +1,9 @@
+Package: ghostknock
+Version: 1.0.0
+Architecture: amd64
+Maintainer: Soyunomas https://github.com/soyunomas/GhostKnock
+Description: Un demonio de port knocking seguro y criptográfico.
+ GhostKnock es una reimplementación moderna del concepto de port knocking
+ que utiliza criptografía de clave pública para autorizar acciones remotas
+ mediante un único paquete UDP.
+Depends: libpcap0.8
