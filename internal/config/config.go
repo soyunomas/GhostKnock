@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
+	"net" // <<-- NUEVA IMPORTACIÓN
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -21,13 +22,14 @@ type Action struct {
 type Config struct {
 	Listener Listener          `yaml:"listener"`
 	Users    []User            `yaml:"users"`
-	Actions  map[string]Action `yaml:"actions"` // Mapa de ActionID a su definición
+	Actions  map[string]Action `yaml:"actions"`
 }
 
 // Listener define en qué interfaz y puerto escucha el servidor.
 type Listener struct {
 	Interface string `yaml:"interface"`
 	Port      int    `yaml:"port"`
+	ListenIP  string `yaml:"listen_ip,omitempty"` // <<-- NUEVO CAMPO
 }
 
 // User define un usuario autorizado.
@@ -66,6 +68,12 @@ func validateConfig(cfg *Config) error {
 	if cfg.Listener.Interface == "" {
 		return fmt.Errorf("la interfaz de escucha no puede estar vacía")
 	}
+	// <<-- NUEVA VALIDACIÓN
+	if cfg.Listener.ListenIP != "" {
+		if net.ParseIP(cfg.Listener.ListenIP) == nil {
+			return fmt.Errorf("el campo 'listen_ip' ('%s') no es una dirección IP válida", cfg.Listener.ListenIP)
+		}
+	}
 	if len(cfg.Users) == 0 {
 		return fmt.Errorf("no se han definido usuarios en la sección 'users'")
 	}
@@ -73,9 +81,8 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("no se han definido acciones en la sección 'actions'")
 	}
 
-	// Primero, validamos todos los usuarios.
 	for i := range cfg.Users {
-		user := &cfg.Users[i] // Usamos un puntero para modificar el slice original
+		user := &cfg.Users[i]
 
 		if user.Name == "" {
 			return fmt.Errorf("el usuario en la posición %d no tiene nombre ('name')", i)
@@ -106,8 +113,6 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
-	// Segundo, validamos que cada acción permitida a un usuario exista en la sección global de 'actions'.
-	// Esta es una validación de integridad referencial.
 	for _, user := range cfg.Users {
 		for _, actionID := range user.AllowedActions {
 			if _, ok := cfg.Actions[actionID]; !ok {

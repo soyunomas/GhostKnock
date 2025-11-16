@@ -2,74 +2,159 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
-//	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
+	"net"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/your-org/ghostknock/internal/config"
 	"github.com/your-org/ghostknock/internal/executor"
 	"github.com/your-org/ghostknock/internal/listener"
 	"github.com/your-org/ghostknock/internal/protocol"
+	"golang.org/x/time/rate"
 )
 
 const (
-	replayWindowSeconds   = 5
-	// CAMBIO: La caché ahora es para el cooldown de acciones.
-	actionCooldownSeconds  = 15                // Cooldown de 15 segundos por usuario/acción.
-	cacheCleanupInterval   = 1 * time.Minute   // Frecuencia de limpieza de la caché.
+	replayWindowSeconds      = 5
+	actionCooldownSeconds    = 15
+	cacheCleanupInterval     = 1 * time.Minute
+	rateLimitEventsPerSecond = 1.0
+	rateLimitBurst           = 3
+	limiterCleanupInterval   = 3 * time.Minute
+	limiterEvictionAge       = 5 * time.Minute
+	logFilePath              = "/var/log/ghostknockd.log"
 )
 
-// Server encapsula todo el estado del servidor.
+type ipLimiter struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
 type Server struct {
 	config          *config.Config
-	// RENOMBRADO: De seenSignatures a actionCooldowns para reflejar el nuevo propósito.
 	actionCooldowns map[string]time.Time
 	cacheMutex      sync.RWMutex
+	ipLimiters      map[string]*ipLimiter
+	limitersMutex   sync.Mutex
 }
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	// --- INICIALIZACIÓN DEL LOGGER ESTRUCTURADO A ARCHIVO ---
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Fatalf("FATAL: No se pudo abrir el archivo de log en %s: %v. ¿Ejecutaste con sudo?", logFilePath, err)
+	}
+	defer logFile.Close()
+
+	logger := slog.New(slog.NewTextHandler(logFile, nil))
+	slog.SetDefault(logger)
+	// --------------------------------------------------------
+
 	configFile := flag.String("config", "config.yaml", "Ruta al archivo de configuración YAML")
 	flag.Parse()
 
-	log.Println("Iniciando demonio GhostKnockd...")
+	slog.Info("Iniciando demonio GhostKnockd...")
 
 	cfg, err := config.LoadConfig(*configFile)
 	if err != nil {
-		log.Fatalf("FATAL: Error al cargar la configuración: %v", err)
+		slog.Error("Error al cargar la configuración", "error", err)
+		os.Exit(1)
 	}
-	log.Printf("Configuración cargada con éxito. %d usuario(s) y %d accione(s) definidas.", len(cfg.Users), len(cfg.Actions))
+	slog.Info(
+		"Configuración cargada con éxito",
+		"users_count", len(cfg.Users),
+		"actions_count", len(cfg.Actions),
+	)
 
 	server := &Server{
 		config:          cfg,
-		actionCooldowns: make(map[string]time.Time), // CAMBIO: Nombre del mapa actualizado
+		actionCooldowns: make(map[string]time.Time),
+		ipLimiters:      make(map[string]*ipLimiter),
 	}
 
+	// --- CONFIGURACIÓN DEL GRACEFUL SHUTDOWN ---
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	// ---------------------------------------------
+
 	go server.startCacheCleaner()
+	go server.startLimiterCleaner()
 
 	packetsCh := make(chan listener.PacketInfo)
-	go listener.Start(cfg.Listener.Interface, cfg.Listener.Port, packetsCh)
+	// <<-- CAMBIO: Pasamos la struct de configuración del listener completa.
+	go listener.Start(ctx, cfg.Listener, packetsCh)
 
-	log.Println("El listener está activo. Procesando knocks recibidos...")
-	for packetInfo := range packetsCh {
-		server.processKnock(packetInfo)
+	slog.Info("El listener está activo, procesando knocks y esperando señales...")
+
+mainLoop:
+	for {
+		select {
+		case packetInfo, ok := <-packetsCh:
+			if !ok {
+				slog.Info("El canal del listener se ha cerrado, finalizando.")
+				break mainLoop
+			}
+			server.processKnock(packetInfo)
+		case sig := <-signalChan:
+			slog.Info("Señal de apagado recibida", "signal", sig.String())
+			slog.Info("Iniciando cierre controlado...")
+			cancel()
+		}
+	}
+
+	slog.Info("Demonio GhostKnockd detenido limpiamente.")
+}
+
+func (s *Server) getLimiter(ip net.IP) *rate.Limiter {
+	s.limitersMutex.Lock()
+	defer s.limitersMutex.Unlock()
+	ipStr := ip.String()
+	limiter, exists := s.ipLimiters[ipStr]
+	if !exists {
+		newLimiter := rate.NewLimiter(rateLimitEventsPerSecond, rateLimitBurst)
+		s.ipLimiters[ipStr] = &ipLimiter{limiter: newLimiter, lastSeen: time.Now()}
+		return newLimiter
+	}
+	limiter.lastSeen = time.Now()
+	return limiter.limiter
+}
+
+func (s *Server) startLimiterCleaner() {
+	ticker := time.NewTicker(limiterCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.limitersMutex.Lock()
+		purgedCount := 0
+		for ip, limiterInfo := range s.ipLimiters {
+			if time.Since(limiterInfo.lastSeen) > limiterEvictionAge {
+				delete(s.ipLimiters, ip)
+				purgedCount++
+			}
+		}
+		s.limitersMutex.Unlock()
+		if purgedCount > 0 {
+			slog.Debug("Limpiados limitadores de IP inactivos", "count", purgedCount)
+		}
 	}
 }
 
-// startCacheCleaner ahora limpia el mapa de cooldowns. La lógica es la misma.
 func (s *Server) startCacheCleaner() {
 	ticker := time.NewTicker(cacheCleanupInterval)
 	defer ticker.Stop()
-
 	for range ticker.C {
 		s.cacheMutex.Lock()
-		
 		purgedCount := 0
-		// La duración de expiración ahora es el cooldown.
 		expirationDuration := time.Duration(actionCooldownSeconds) * time.Second
 		for key, lastSeen := range s.actionCooldowns {
 			if time.Since(lastSeen) > expirationDuration {
@@ -77,18 +162,22 @@ func (s *Server) startCacheCleaner() {
 				purgedCount++
 			}
 		}
-		
 		s.cacheMutex.Unlock()
 		if purgedCount > 0 {
-			log.Printf("[CacheCleaner] Limpiadas %d entradas de cooldown antiguas.", purgedCount)
+			slog.Debug("Limpiadas entradas de cooldown antiguas", "count", purgedCount)
 		}
 	}
 }
 
 func (s *Server) processKnock(packetInfo listener.PacketInfo) {
+	limiter := s.getLimiter(packetInfo.SourceIP)
+	if !limiter.Allow() {
+		slog.Warn("Paquete descartado", "reason", "rate_limit_exceeded", "source_ip", packetInfo.SourceIP.String())
+		return
+	}
+
 	rawPayload := packetInfo.Payload
 	if len(rawPayload) <= ed25519.SignatureSize {
-		// ... (código sin cambios)
 		return
 	}
 
@@ -97,18 +186,17 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 
 	payload, err := protocol.DeserializePayload(serializedPayload)
 	if err != nil {
-		// ... (código sin cambios)
+		slog.Warn("Paquete descartado", "reason", "payload_deserialization_failed", "source_ip", packetInfo.SourceIP.String(), "error", err)
 		return
 	}
 
 	timestamp := time.Unix(0, payload.Timestamp)
 	age := time.Since(timestamp)
 	if age < 0 || age > (replayWindowSeconds*time.Second) {
-		log.Printf("Paquete descartado: fuera de la ventana de tiempo anti-replay (edad: %s).", age)
+		slog.Warn("Paquete descartado", "reason", "outside_replay_window", "source_ip", packetInfo.SourceIP.String(), "age_seconds", age.Seconds())
 		return
 	}
 
-	// --- LÓGICA DE AUTENTICACIÓN Y AUTORIZACIÓN (PRIMERO) ---
 	var authorizedUser *config.User
 	var isSignatureValid bool
 	for _, user := range s.config.Users {
@@ -123,54 +211,54 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	}
 
 	if !isSignatureValid {
-		log.Printf("Paquete descartado de %s: firma inválida.", packetInfo.SourceIP)
+		slog.Warn("Paquete descartado", "reason", "invalid_signature", "source_ip", packetInfo.SourceIP.String())
 		return
 	}
 	if authorizedUser == nil {
-		log.Printf("Paquete descartado de %s: firma válida, pero la acción '%s' no está autorizada.", packetInfo.SourceIP, payload.ActionID)
+		slog.Warn("Paquete descartado", "reason", "unauthorized_action", "source_ip", packetInfo.SourceIP.String(), "action_id", payload.ActionID)
 		return
 	}
 
-	// --- NUEVA LÓGICA DE COOLDOWN (DESPUÉS DE AUTORIZAR) ---
-	// 1. Crear una clave única para la combinación usuario+acción.
-	// La clave pública del usuario es su identificador único.
 	cooldownKey := fmt.Sprintf("%s:%s", authorizedUser.PublicKeyB64, payload.ActionID)
-
-	// 2. Comprobar si esta acción está actualmente en cooldown para este usuario.
 	s.cacheMutex.RLock()
 	lastExecutionTime, onCooldown := s.actionCooldowns[cooldownKey]
 	s.cacheMutex.RUnlock()
 
 	if onCooldown {
-		// Calcular cuánto tiempo queda de cooldown.
 		elapsed := time.Since(lastExecutionTime)
 		if elapsed < (time.Duration(actionCooldownSeconds) * time.Second) {
 			remaining := (time.Duration(actionCooldownSeconds) * time.Second) - elapsed
-			log.Printf("[COOLDOWN ACTIVO] Acción '%s' para '%s' descartada. Inténtelo de nuevo en %s.",
-				payload.ActionID, authorizedUser.Name, remaining.Round(time.Second))
-			return // ¡Acción repetida bloqueada!
+			slog.Warn(
+				"Acción descartada",
+				"reason", "cooldown_active",
+				"user", authorizedUser.Name,
+				"action_id", payload.ActionID,
+				"remaining_seconds", remaining.Seconds(),
+			)
+			return
 		}
 	}
 
-	// 3. Registrar la ejecución ANTES de ejecutar la acción.
 	s.cacheMutex.Lock()
 	s.actionCooldowns[cooldownKey] = time.Now()
 	s.cacheMutex.Unlock()
-	// ---------------------------------------------------------
 
-	log.Printf("✅ [ÉXITO] Knock válido de '%s' desde %s. Acción autorizada: '%s'", authorizedUser.Name, packetInfo.SourceIP, payload.ActionID)
+	slog.Info("Knock válido recibido y autorizado",
+		"user", authorizedUser.Name,
+		"source_ip", packetInfo.SourceIP.String(),
+		"action_id", payload.ActionID,
+	)
 
 	actionDef, ok := s.config.Actions[payload.ActionID]
 	if !ok {
-		// ... (código sin cambios)
+		slog.Error("Inconsistencia de configuración: la acción autorizada no existe", "action_id", payload.ActionID)
 		return
 	}
 	if err := executor.Execute(actionDef, packetInfo.SourceIP); err != nil {
-		// ... (código sin cambios)
+		slog.Error("Falló la ejecución de la acción", "action_id", payload.ActionID, "user", authorizedUser.Name, "error", err)
 	}
 }
 
-// isActionAllowed (sin cambios)
 func isActionAllowed(action string, allowedActions []string) bool {
 	for _, a := range allowedActions {
 		if a == action {

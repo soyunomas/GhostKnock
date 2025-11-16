@@ -1,28 +1,84 @@
-# Configuración del servidor GhostKnockd
+# ==============================================================================
+# Archivo de Configuración de Ejemplo para GhostKnockd
+# ==============================================================================
+# Este archivo define el comportamiento completo del demonio GhostKnock.
+# Copie este archivo a /etc/ghostknock/config.yaml y edítelo según sus necesidades.
+
+# ------------------------------------------------------------------------------
+# Configuración del Listener de Red
+# ------------------------------------------------------------------------------
+# Define cómo GhostKnock escucha los paquetes en la red.
 listener:
-  interface: "any" # 'any' para todas, o una específica como 'eth0', 'en0'
+  # La interfaz de red en la que escuchar.
+  # - "any": Escucha en todas las interfaces de red disponibles.
+  # - "eth0", "enp3s0", "lo": Escucha solo en una interfaz específica.
+  interface: "any"
+
+  # El puerto UDP en el que se esperan los "knocks".
+  # Asegúrese de que este puerto no esté en uso por otro servicio, aunque
+  # GhostKnock no lo "abre" formalmente, solo escucha el tráfico dirigido a él.
   port: 3001
 
-# Lista de usuarios autorizados y sus permisos
+  # (OPCIONAL) La dirección IP específica en la que escuchar.
+  # Por defecto, si se omite esta línea, GhostKnock procesará los knocks
+  # dirigidos a CUALQUIER dirección IP asignada a la interfaz especificada.
+  # Si define una IP aquí, solo se procesarán los knocks enviados
+  # explícitamente a esa dirección IP de destino.
+  # Esto es útil en servidores con múltiples IPs en una misma interfaz.
+  # listen_ip: "192.168.1.100"
+
+# ------------------------------------------------------------------------------
+# Configuración de Usuarios y Permisos
+# ------------------------------------------------------------------------------
+# Lista de clientes autorizados para enviar knocks.
 users:
   - name: "admin_laptop"
-    # Pega aquí la clave pública Base64 generada por ghostknock-keygen
-    public_key: "PKKqGXzisWXn29dWFpFMoA8m+50C2RPY1Wz1m2xoTvw="
-    # Lista de acciones que este usuario puede solicitar
+    # La clave pública en formato Base64, generada por `ghostknock-keygen`.
+    # Cada usuario DEBE tener una clave única.
+    public_key: "PEGA_AQUI_LA_CLAVE_PUBLICA_DEL_ADMINISTRADOR"
+
+    # (OPCIONAL, RECOMENDADO) Lista de IPs o rangos CIDR permitidos para este usuario.
+    # Si se define, un knock válido solo será aceptado si proviene de una de estas IPs.
+    # Es una capa de seguridad adicional muy potente.
+    # source_ips:
+    #   - "84.120.30.45/32"  # IP estática de la oficina
+    #   - "192.168.1.0/24"    # Red local de casa
+
+    # Lista de identificadores de acciones que este usuario tiene permitido ejecutar.
+    # Estos deben coincidir con una de las acciones definidas en la sección "actions".
     actions:
-      - "create-test-file"
+      - "open-ssh-port"
+      - "restart-webserver"
 
   - name: "dev_workstation"
-    public_key: "PKKqGXzisWXn29dWFpFMoA8m+50C2RPY1Wz1m2xoTvw=" # <-- RECUERDA CAMBIAR ESTA
+    public_key: "PEGA_AQUI_LA_CLAVE_PUBLICA_DEL_DESARROLLADOR"
     actions:
       - "create-test-file"
 
-# Definición de las plantillas de comandos para cada acción.
+# ------------------------------------------------------------------------------
+# Definición de Acciones Disponibles
+# ------------------------------------------------------------------------------
+# Un mapa de todas las acciones que el servidor puede ejecutar.
 actions:
+  "open-ssh-port":
+    # El comando a ejecutar en el shell.
+    # Puede usar plantillas de Go. {{.SourceIP}} se reemplazará por la IP del cliente.
+    command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
+
+    # (OPCIONAL) Un comando que revierte la acción principal.
+    revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
+
+    # (OPCIONAL) Segundos a esperar antes de ejecutar el comando de reversión.
+    # Si es 0 o se omite, la reversión no se programa.
+    revert_delay_seconds: 300 # La regla de firewall se elimina tras 5 minutos.
+
+  "restart-webserver":
+    command: "systemctl restart nginx"
+    # No todas las acciones tienen una reversión lógica.
+    revert_command: ""
+    revert_delay_seconds: 0
+
   "create-test-file":
-    # CORRECCIÓN: Usamos comillas dobles (\") para que el shell expanda $(date).
-    command: "echo \"Knock válido de {{.SourceIP}} recibido a las $(date)\" > /tmp/ghostknock_success.txt"
-    # Comando para limpiar el archivo de prueba.
+    command: "echo \"Knock válido de {{.SourceIP}} a las $(date)\" > /tmp/ghostknock_success.txt"
     revert_command: "rm /tmp/ghostknock_success.txt"
-    # Revertimos la acción rápidamente para la prueba, después de 15 segundos.
-    revert_delay_seconds: 15
+    revert_delay_seconds: 60

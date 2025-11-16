@@ -2,12 +2,16 @@
 package listener
 
 import (
+	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
+	"os"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
+	"github.com/your-org/ghostknock/internal/config" // <<-- NUEVA IMPORTACIÓN
 )
 
 // PacketInfo contiene el payload de un paquete y metadatos relevantes.
@@ -16,43 +20,63 @@ type PacketInfo struct {
 	SourceIP net.IP
 }
 
-// Start captura paquetes en la interfaz y puerto especificados. Envía la información
-// del paquete (PacketInfo) a través del canal 'packetsCh'.
-func Start(ifaceName string, port int, packetsCh chan<- PacketInfo) {
-	log.Printf("Iniciando escucha pasiva en la interfaz '%s' para el puerto UDP %d", ifaceName, port)
+// Start ahora acepta una struct config.Listener para mayor flexibilidad.
+func Start(ctx context.Context, listenerCfg config.Listener, packetsCh chan<- PacketInfo) {
+	defer close(packetsCh)
 
-	handle, err := pcap.OpenLive(ifaceName, 1024, true, pcap.BlockForever)
+	slog.Info("Iniciando escucha pasiva", "interface", listenerCfg.Interface, "udp_port", listenerCfg.Port)
+
+	const pcapTimeout = 300 * time.Millisecond
+	handle, err := pcap.OpenLive(listenerCfg.Interface, 1024, true, pcapTimeout)
 	if err != nil {
-		log.Fatalf("FATAL: Error al abrir la interfaz '%s': %v", ifaceName, err)
+		slog.Error("Error al abrir la interfaz de captura", "interface", listenerCfg.Interface, "error", err)
+		os.Exit(1)
 	}
 	defer handle.Close()
 
-	bpfFilter := fmt.Sprintf("udp and port %d", port)
-	if err := handle.SetBPFFilter(bpfFilter); err != nil {
-		log.Fatalf("FATAL: Error al establecer el filtro BPF ('%s'): %v", bpfFilter, err)
+	// <<-- LÓGICA DE FILTRADO DINÁMICO
+	var bpfFilter string
+	if listenerCfg.ListenIP != "" {
+		bpfFilter = fmt.Sprintf("dst host %s and udp and port %d", listenerCfg.ListenIP, listenerCfg.Port)
+	} else {
+		bpfFilter = fmt.Sprintf("udp and port %d", listenerCfg.Port)
 	}
-	log.Printf("Filtro BPF aplicado: '%s'", bpfFilter)
+
+	if err := handle.SetBPFFilter(bpfFilter); err != nil {
+		slog.Error("Error al establecer el filtro BPF", "filter", bpfFilter, "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Filtro BPF aplicado con éxito", "filter", bpfFilter)
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
-	log.Println("Esperando paquetes...")
-	for packet := range packetSource.Packets() {
-		var srcIP net.IP
-		// Extraemos la capa de red para obtener la IP de origen.
-		// Este enfoque es agnóstico a IPv4/IPv6.
-		if netLayer := packet.NetworkLayer(); netLayer != nil {
-			srcIP = netLayer.NetworkFlow().Src().Raw()
-		}
-
-		// Solo procesamos el paquete si tiene una capa de aplicación (payload UDP)
-		// y hemos podido determinar su IP de origen.
-		if appLayer := packet.ApplicationLayer(); appLayer != nil && srcIP != nil {
-			packetInfo := PacketInfo{
-				Payload:  appLayer.Payload(),
-				SourceIP: srcIP,
+	slog.Info("Esperando paquetes...")
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("Contexto cancelado, deteniendo el listener de paquetes.")
+			return
+		case packet := <-packetSource.Packets():
+			if packet == nil {
+				continue
 			}
-			// Enviamos la estructura completa al procesador.
-			packetsCh <- packetInfo
+
+			var srcIP net.IP
+			if netLayer := packet.NetworkLayer(); netLayer != nil {
+				srcIP = netLayer.NetworkFlow().Src().Raw()
+			}
+
+			if appLayer := packet.ApplicationLayer(); appLayer != nil && srcIP != nil {
+				packetInfo := PacketInfo{
+					Payload:  appLayer.Payload(),
+					SourceIP: srcIP,
+				}
+				select {
+				case packetsCh <- packetInfo:
+				case <-ctx.Done():
+					return
+				}
+			}
 		}
 	}
 }

@@ -4,7 +4,7 @@ package executor
 import (
 	"bytes"
 	"fmt"
-	"log"
+	"log/slog" // <<-- NUEVA IMPORTACIÓN
 	"net"
 	"os/exec"
 	"text/template"
@@ -15,10 +15,10 @@ import (
 
 // Execute procesa una acción, la ejecuta y, si está configurado, programa su reversión.
 func Execute(action config.Action, sourceIP net.IP) error {
-	log.Printf("[Executor] Ejecutando acción para IP %s", sourceIP)
+	slog.Debug("Ejecutando acción", "source_ip", sourceIP.String())
 
 	// Ejecutar el comando principal.
-	if err := runCommand(action.Command, sourceIP); err != nil {
+	if err := runCommand("main", action.Command, sourceIP); err != nil {
 		// Envolvemos el error para dar más contexto en los logs.
 		return fmt.Errorf("falló la ejecución del comando principal: %w", err)
 	}
@@ -34,28 +34,32 @@ func Execute(action config.Action, sourceIP net.IP) error {
 // scheduleRevert espera el tiempo especificado y luego ejecuta el comando de reversión.
 func scheduleRevert(action config.Action, sourceIP net.IP) {
 	delay := time.Duration(action.RevertDelaySeconds) * time.Second
-	log.Printf("[Executor] Programando reversión para la IP %s en %s", sourceIP, delay)
+	slog.Info(
+		"Programando reversión de acción",
+		"source_ip", sourceIP.String(),
+		"delay", delay.String(),
+	)
 	time.Sleep(delay)
 
-	log.Printf("[Executor] Ejecutando reversión para la IP %s", sourceIP)
-	if err := runCommand(action.RevertCommand, sourceIP); err != nil {
+	slog.Info("Ejecutando reversión", "source_ip", sourceIP.String())
+	if err := runCommand("revert", action.RevertCommand, sourceIP); err != nil {
 		// Logueamos el error pero no podemos hacer mucho más, ya que estamos en una goroutine.
-		log.Printf("[ERROR] Falló la ejecución del comando de reversión para la IP %s: %v", sourceIP, err)
+		slog.Error(
+			"Falló la ejecución del comando de reversión",
+			"source_ip", sourceIP.String(),
+			"error", err,
+		)
 	}
 }
 
-// runCommand es el núcleo de la ejecución segura. Utiliza templates para
-// construir el comando y lo ejecuta a través de un shell para soportar
-// redirecciones y otras características.
-func runCommand(commandTemplate string, sourceIP net.IP) error {
-	// 1. Preparar los datos para la plantilla.
+// runCommand es el núcleo de la ejecución segura.
+func runCommand(commandType, commandTemplate string, sourceIP net.IP) error {
 	templateData := struct {
 		SourceIP string
 	}{
 		SourceIP: sourceIP.String(),
 	}
 
-	// 2. Crear y ejecutar la plantilla para construir el comando final.
 	tmpl, err := template.New("cmd").Parse(commandTemplate)
 	if err != nil {
 		return fmt.Errorf("error interno al parsear la plantilla de comando: %w", err)
@@ -67,25 +71,26 @@ func runCommand(commandTemplate string, sourceIP net.IP) error {
 	}
 	finalCommand := buf.String()
 
-	// 3. **CAMBIO CLAVE**: Ejecutar el comando a través de `/bin/sh -c`.
-	// Esto permite el uso de tuberías (|), redirección (>, <) y otras
-	// funcionalidades del shell en los comandos definidos en config.yaml.
 	cmd := exec.Command("/bin/sh", "-c", finalCommand)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	log.Printf("[Executor] Comando a ejecutar (via sh -c): %s", finalCommand)
+	slog.Info("Ejecutando comando en el shell",
+		"type", commandType,
+		"command", finalCommand,
+		"source_ip", sourceIP.String(),
+	)
 
-	// 4. Ejecutar el comando.
 	err = cmd.Run()
 
 	// Registrar siempre la salida para una depuración completa.
 	if stdout.Len() > 0 {
-		log.Printf("[Executor] Salida (stdout): %s", stdout.String())
+		slog.Debug("Comando ejecutado (stdout)", "type", commandType, "output", stdout.String())
 	}
 	if stderr.Len() > 0 {
-		log.Printf("[Executor] Error (stderr): %s", stderr.String())
+		// La salida de error estándar se registra como un aviso.
+		slog.Warn("Comando ejecutado (stderr)", "type", commandType, "output", stderr.String())
 	}
 
 	if err != nil {
