@@ -210,7 +210,7 @@ actions:
 ### 🟡 Fase IV: Usabilidad Avanzada — **EN PROGRESO**
 
 *   [x] Makefile para automatizar compilación e instalación.
-*   [ ] Configuración del cliente mejorada (buscar claves en `~/.config/ghostknock/`).
+*   [x] Configuración del cliente mejorada (buscar claves en `~/.config/ghostknock/`).
 *   [x] **Implementar opciones de configuración avanzadas para robustez y seguridad:**
     *   [x] **A nivel de Servidor:**
         *   `log_level`: Para poder ajustar la verbosidad de los logs (debug, info, warn) desde la configuración, sin necesidad de recompilar.
@@ -221,7 +221,8 @@ actions:
         *   `run_as_user`: Para ejecutar comandos con privilegios reducidos, aplicando el principio de mínimo privilegio y reduciendo drásticamente la superficie de ataque.
     *   [x] **A nivel de Usuario:**
         *   `source_ips`: Para restringir desde qué direcciones IP puede operar un usuario, añadiendo una capa de seguridad crucial que ata una clave criptográfica a una ubicación de red.
-*   [ ] Empaquetado (Systemd service, .deb/.rpm).
+*   [x] Empaquetado (Systemd service).
+*   [ ] Empaquetado (.deb).
 
 ---
 

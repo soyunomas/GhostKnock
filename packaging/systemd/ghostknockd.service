@@ -1,0 +1,40 @@
+# /etc/systemd/system/ghostknockd.service
+#
+# Este archivo define cómo Systemd debe gestionar el demonio GhostKnockd.
+# Creado por 'make install', gestiona el servicio con:
+# systemctl start|stop|restart|status|enable|disable ghostknockd
+
+[Unit]
+Description=GhostKnockd - Secure Port Knocking Daemon
+# Nos aseguramos de que la red esté completamente operativa antes de intentar iniciar.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# 'simple' es el tipo correcto para un proceso que se queda en primer plano.
+Type=simple
+
+# El usuario que ejecutará el servicio. Pcap requiere privilegios de root.
+User=root
+Group=root
+
+# El comando completo para iniciar el demonio, usando rutas absolutas.
+# Esto hace que el servicio sea independiente del entorno.
+ExecStart=/usr/local/bin/ghostknockd -config /etc/ghostknock/config.yaml
+
+# Le decimos a Systemd dónde encontrar nuestro archivo PID.
+# Esto mejora la gestión del proceso.
+PIDFile=/var/run/ghostknockd.pid
+
+# Política de reinicio: si el proceso falla (código de salida no cero),
+# Systemd lo reiniciará automáticamente.
+Restart=on-failure
+
+# Esperar 5 segundos entre reinicios para evitar bucles rápidos en caso de
+# un error de configuración persistente.
+RestartSec=5s
+
+[Install]
+# Habilita el servicio para que se inicie en el arranque del sistema
+# en un entorno multi-usuario estándar (sin GUI).
+WantedBy=multi-user.target

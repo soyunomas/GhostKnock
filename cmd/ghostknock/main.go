@@ -8,13 +8,14 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 
 	// Esta ruta DEBE COINCIDIR con la línea 'module' en tu archivo go.mod
 	"github.com/your-org/ghostknock/internal/protocol"
 )
 
 const (
-	privateKeyFile = "id_ed25519"
+	defaultKeyFile = "id_ed25519"
 )
 
 func main() {
@@ -22,6 +23,7 @@ func main() {
 	host := flag.String("host", "", "Host o dirección IP del servidor GhostKnock (requerido)")
 	port := flag.Int("port", 3001, "Puerto UDP en el que el servidor escucha")
 	action := flag.String("action", "", "ActionID a solicitar (requerido)")
+	keyFile := flag.String("key", "", "Ruta a la clave privada ed25519 (por defecto: ~/.config/ghostknock/id_ed25519)")
 	flag.Parse()
 
 	if *host == "" || *action == "" {
@@ -33,19 +35,35 @@ func main() {
 	log.SetFlags(0)
 	log.Printf("Preparando knock para la acción '%s' en %s:%d...", *action, *host, *port)
 
-	// 2. Cargar la clave privada del fichero.
-	privateKeyBytes, err := os.ReadFile(privateKeyFile)
+	// 2. DETERMINAR LA RUTA DE LA CLAVE PRIVADA
+	var finalKeyPath string
+	if *keyFile != "" {
+		// El usuario especificó una clave, la usamos.
+		finalKeyPath = *keyFile
+		log.Printf("Usando clave privada especificada: %s", finalKeyPath)
+	} else {
+		// El usuario no especificó una clave, buscamos la predeterminada.
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("FATAL: No se pudo determinar el directorio home para buscar la clave por defecto: %v", err)
+		}
+		finalKeyPath = filepath.Join(homeDir, ".config", "ghostknock", defaultKeyFile)
+		log.Printf("Usando clave privada por defecto: %s", finalKeyPath)
+	}
+
+	// 3. Cargar la clave privada del fichero.
+	privateKeyBytes, err := os.ReadFile(finalKeyPath)
 	if err != nil {
-		log.Fatalf("FATAL: No se pudo leer la clave privada '%s'. ¿Ejecutaste ghostknock-keygen? Error: %v", privateKeyFile, err)
+		log.Fatalf("FATAL: No se pudo leer la clave privada '%s'. ¿Ejecutaste ghostknock-keygen? Error: %v", finalKeyPath, err)
 	}
 
 	// VALIDACIÓN DE SEGURIDAD: Una clave privada ed25519 siempre tiene 64 bytes.
 	if len(privateKeyBytes) != ed25519.PrivateKeySize {
-		log.Fatalf("FATAL: El archivo de clave privada '%s' tiene un tamaño incorrecto. Se esperaba %d bytes, pero tiene %d.", privateKeyFile, ed25519.PrivateKeySize, len(privateKeyBytes))
+		log.Fatalf("FATAL: El archivo de clave privada '%s' tiene un tamaño incorrecto. Se esperaba %d bytes, pero tiene %d.", finalKeyPath, ed25519.PrivateKeySize, len(privateKeyBytes))
 	}
 	privateKey := ed25519.PrivateKey(privateKeyBytes)
 
-	// 3. Crear y serializar el payload del protocolo.
+	// 4. Crear y serializar el payload del protocolo.
 	payload := protocol.NewPayload(*action)
 
 	serializedPayload, err := payload.Serialize()
@@ -53,13 +71,13 @@ func main() {
 		log.Fatalf("FATAL: No se pudo serializar el payload: %v", err)
 	}
 
-	// 4. Firmar el payload serializado.
+	// 5. Firmar el payload serializado.
 	signature := ed25519.Sign(privateKey, serializedPayload)
 
-	// 5. Construir el mensaje final: [firma][payload serializado]
+	// 6. Construir el mensaje final: [firma][payload serializado]
 	finalMessage := append(signature, serializedPayload...)
 
-	// 6. Enviar el mensaje en un único paquete UDP.
+	// 7. Enviar el mensaje en un único paquete UDP.
 	serverAddr := fmt.Sprintf("%s:%d", *host, *port)
 	conn, err := net.Dial("udp", serverAddr)
 	if err != nil {
@@ -72,5 +90,5 @@ func main() {
 		log.Fatalf("FATAL: Error al enviar el paquete UDP: %v", err)
 	}
 
-	log.Printf("✅ ¡Éxito! Knock enviado (%d bytes).", bytesSent)
+	log.Printf("-- Knock enviado (%d bytes).", bytesSent)
 }
