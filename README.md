@@ -212,6 +212,17 @@ actions:
     command: "sleep 2 && reboot"
     cooldown_seconds: 3600 # No permitir reinicios accidentales seguidos.
 
+  # ==========================================================
+  # EJEMPLO 6: Actualizar todos los paquetes del sistema (apt)
+  # ==========================================================
+  "system-update":
+    command: "apt-get update && apt-get upgrade -y"
+    # Una actualización puede tardar mucho. Un timeout generoso de 15 minutos
+    # previene que el proceso se quede colgado indefinidamente.
+    timeout_seconds: 900
+    # Esta es una operación intensiva. Un cooldown de 1 hora (3600s) previene
+    # que se ejecute repetidamente por accidente o de forma maliciosa.
+    cooldown_seconds: 3600
 ```
 
 ---
