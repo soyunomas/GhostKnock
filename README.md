@@ -98,7 +98,7 @@ Asegúrate de tener el binario `ghostknock` y el archivo de clave privada `id_ed
 
 ---
 
-## 📄 `config.yaml` Explicado y Ejemplos para Sysadmins
+## 📄 `config.yaml` Explicado y Ejemplos
 
 Este es el corazón de GhostKnock. A continuación se muestra un ejemplo completo y comentado con casos de uso prácticos para un administrador de sistemas.
 
