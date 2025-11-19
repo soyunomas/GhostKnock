@@ -1,0 +1,134 @@
+# ==============================================================================
+# Archivo de Configuración de Ejemplo para GhostKnockd
+# ==============================================================================
+# Este archivo define el comportamiento completo del demonio GhostKnock.
+# Copie este archivo a /etc/ghostknock/config.yaml y edítelo según sus necesidades.
+
+# ------------------------------------------------------------------------------
+# Configuración del Listener de Red
+# ------------------------------------------------------------------------------
+# Define cómo GhostKnock escucha los paquetes en la red.
+listener:
+  # La interfaz de red en la que escuchar.
+  # - "any": Escucha en todas las interfaces de red disponibles.
+  # - "eth0", "enp3s0", "lo": Escucha solo en una interfaz específica.
+  interface: "any"
+
+  # El puerto UDP en el que se esperan los "knocks".
+  # Asegúrese de que este puerto no esté en uso por otro servicio, aunque
+  # GhostKnock no lo "abre" formalmente, solo escucha el tráfico dirigido a él.
+  port: 3001
+
+  # (OPCIONAL) La dirección IP específica en la que escuchar.
+  # Por defecto, si se omite esta línea, GhostKnock procesará los knocks
+  # dirigidos a CUALQUIER dirección IP asignada a la interfaz especificada.
+  # Si define una IP aquí, solo se procesarán los knocks enviados
+  # explícimanente a esa dirección IP de destino.
+  # Esto es útil en servidores con múltiples IPs en una misma interfaz.
+  # listen_ip: "192.168.1.100"
+
+# ------------------------------------------------------------------------------
+# Configuración de Logging
+# ------------------------------------------------------------------------------
+# Controla la verbosidad y el formato de los registros del servidor.
+logging:
+  # Nivel de verbosidad de los logs.
+  # Valores válidos: "debug", "info", "warn", "error".
+  # - "debug": Muy verboso, útil para depurar problemas.
+  # - "info":  Nivel por defecto, registra eventos importantes.
+  # - "warn":  Registra advertencias que no son errores críticos.
+  # - "error": Solo registra errores graves.
+  log_level: "info"
+
+# ------------------------------------------------------------------------------
+# Configuración del Demonio
+# ------------------------------------------------------------------------------
+# Opciones que controlan el comportamiento del proceso del servidor.
+daemon:
+  # (OPCIONAL) Ruta para crear un archivo PID.
+  # Si se especifica, GhostKnockd escribirá su ID de proceso en este archivo
+  # al iniciar y lo eliminará al detenerse limpiamente.
+  # Esto es muy útil para la integración con systemd, monit, u otros scripts.
+  # El directorio debe ser escribible por el usuario que ejecuta el demonio.
+  pid_file: "/var/run/ghostknockd.pid"
+
+
+# ------------------------------------------------------------------------------
+# Configuración de Usuarios y Permisos
+# ------------------------------------------------------------------------------
+# Lista de clientes autorizados para enviar knocks.
+users:
+  - name: "admin_laptop"
+    # La clave pública en formato Base64, generada por `ghostknock-keygen`.
+    # Cada usuario DEBE tener una clave única.
+    public_key: "UYNBBmAIaDOatBurz96BKIBixceO1z46WCmkcWzrdfw="
+
+    # (OPCIONAL, RECOMENDADO) Lista de IPs o rangos CIDR permitidos para este usuario.
+    # Si se define, un knock válido solo será aceptado si proviene de una de estas IPs.
+    # Es una capa de seguridad adicional muy potente.
+    # IMPORTANTE: Se debe usar la notación CIDR completa.
+    source_ips:
+      - "84.120.30.45/32"  # IP estática de la oficina
+      - "192.168.1.0/24"    # Red local de casa
+
+    # Lista de identificadores de acciones que este usuario tiene permitido ejecutar.
+    # Estos deben coincidir con una de las acciones definidas en la sección "actions".
+    actions:
+      - "open-ssh-port"
+      - "restart-webserver"
+      - "long-running-task"
+      - "clear-app-cache"
+
+  - name: "dev_workstation"
+    public_key: "UYNBBmAIaDOatBurz96BKIBixceO1z46WCmkcWzrdfw="
+    # Este usuario no tiene `source_ips`, por lo que puede enviar knocks desde cualquier IP.
+    actions:
+      - "create-test-file"
+#     - "trigger-backup"
+
+
+# ------------------------------------------------------------------------------
+# Definición de Acciones Disponibles
+# ------------------------------------------------------------------------------
+# Un mapa de todas las acciones que el servidor puede ejecutar.
+actions:
+  "open-ssh-port":
+    command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
+    revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
+    revert_delay_seconds: 300
+    # Esta acción necesita privilegios de root, por lo que NO se define 'run_as_user'.
+    # El demonio ghostknockd (ejecutado como root) la ejecutará como root.
+
+  "restart-webserver":
+    command: "systemctl restart nginx"
+    revert_command: ""
+    timeout_seconds: 15
+    cooldown_seconds: 60
+
+  "trigger-backup":
+    command: "/usr/local/bin/backup.sh"
+    timeout_seconds: 600
+    cooldown_seconds: 3600
+
+  "create-test-file":
+    command: "echo \"Knock válido de {{.SourceIP}} a las $(date)\" > /tmp/ghostknock_success.txt"
+    revert_command: "rm /tmp/ghostknock_success.txt"
+    revert_delay_seconds: 60
+    cooldown_seconds: 0
+    # (OPCIONAL) Usuario del sistema como el cual se ejecutará el comando.
+    # Esto aplica el principio de mínimo privilegio. El usuario debe existir.
+    # Prohibido usar 'root'.
+    run_as_user: "nobody"
+
+  "long-running-task":
+    command: "echo 'Iniciando tarea larga...' && sleep 10 && echo 'Tarea finalizada (no deberías ver esto)'"
+    timeout_seconds: 3
+
+  "clear-app-cache":
+    command: "rm -rf /var/www/my-app/cache/*"
+    # Este comando es peligroso si se ejecuta como root. Al ejecutarlo como
+    # el usuario del servidor web, limitamos el daño potencial solo a los
+    # archivos que ese usuario posee.
+    run_as_user: "www-data"
+    timeout_seconds: 5
+    cooldown_seconds: 10

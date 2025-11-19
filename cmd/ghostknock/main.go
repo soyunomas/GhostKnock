@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings" // <<-- NUEVA IMPORTACIÓN
 
 	// Esta ruta DEBE COINCIDIR con la línea 'module' en tu archivo go.mod
 	"github.com/your-org/ghostknock/internal/protocol"
@@ -24,6 +25,8 @@ func main() {
 	port := flag.Int("port", 3001, "Puerto UDP en el que el servidor escucha")
 	action := flag.String("action", "", "ActionID a solicitar (requerido)")
 	keyFile := flag.String("key", "", "Ruta a la clave privada ed25519 (por defecto: ~/.config/ghostknock/id_ed25519)")
+	// Nuevo flag para argumentos
+	args := flag.String("args", "", "Argumentos opcionales para la acción, formato: clave=valor,clave2=valor2")
 	flag.Parse()
 
 	if *host == "" || *action == "" {
@@ -38,11 +41,9 @@ func main() {
 	// 2. DETERMINAR LA RUTA DE LA CLAVE PRIVADA
 	var finalKeyPath string
 	if *keyFile != "" {
-		// El usuario especificó una clave, la usamos.
 		finalKeyPath = *keyFile
 		log.Printf("Usando clave privada especificada: %s", finalKeyPath)
 	} else {
-		// El usuario no especificó una clave, buscamos la predeterminada.
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			log.Fatalf("FATAL: No se pudo determinar el directorio home para buscar la clave por defecto: %v", err)
@@ -57,14 +58,37 @@ func main() {
 		log.Fatalf("FATAL: No se pudo leer la clave privada '%s'. ¿Ejecutaste ghostknock-keygen? Error: %v", finalKeyPath, err)
 	}
 
-	// VALIDACIÓN DE SEGURIDAD: Una clave privada ed25519 siempre tiene 64 bytes.
 	if len(privateKeyBytes) != ed25519.PrivateKeySize {
 		log.Fatalf("FATAL: El archivo de clave privada '%s' tiene un tamaño incorrecto. Se esperaba %d bytes, pero tiene %d.", finalKeyPath, ed25519.PrivateKeySize, len(privateKeyBytes))
 	}
 	privateKey := ed25519.PrivateKey(privateKeyBytes)
 
-	// 4. Crear y serializar el payload del protocolo.
+	// 4. Crear y rellenar el payload.
 	payload := protocol.NewPayload(*action)
+
+	// --- LÓGICA DE PARSING DE ARGUMENTOS ---
+	if *args != "" {
+		pairs := strings.Split(*args, ",")
+		for _, pair := range pairs {
+			if pair == "" {
+				continue
+			}
+			// SplitN asegura que solo rompemos en el primer '='
+			kv := strings.SplitN(pair, "=", 2)
+			if len(kv) != 2 {
+				log.Fatalf("Error de formato en argumentos: '%s'. Debe ser clave=valor.", pair)
+			}
+			key := strings.TrimSpace(kv[0])
+			value := strings.TrimSpace(kv[1])
+			
+			// Añadimos al mapa de parámetros
+			payload.Params[key] = value
+		}
+		if len(payload.Params) > 0 {
+			log.Printf("Adjuntando %d parámetros al payload.", len(payload.Params))
+		}
+	}
+	// ---------------------------------------
 
 	serializedPayload, err := payload.Serialize()
 	if err != nil {

@@ -1,232 +1,287 @@
 # 👻 GhostKnock
 
 [![Licencia: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Release](https://img.shields.io/badge/release-v1.1.0-blue.svg)](https://github.com/soyunomas/GhostKnock/releases)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-lightgrey.svg)]()
 
-**GhostKnock** es un **ejecutor de acciones remotas** que se activa mediante un único paquete UDP criptográficamente firmado. Aunque inspirado en el *port knocking*, su propósito es mucho más amplio: permite ejecutar de forma segura y discreta cualquier comando preconfigurado en un servidor, haciéndolo invisible a los escaneos de red.
+**GhostKnock** es un sistema de **ejecución remota segura e invisible**.
 
-En lugar de secuencias de paquetes fáciles de detectar, GhostKnock utiliza criptografía de clave pública (`ed25519`) para validar cada solicitud. Esto lo convierte en una herramienta ideal para administradores de sistemas que necesitan un mecanismo de control de emergencia o de automatización que no exponga puertos ni servicios adicionales.
+Permite disparar comandos predefinidos en un servidor enviando un único paquete UDP. A diferencia del "port knocking" tradicional, GhostKnock no depende de secuencias secretas de puertos, sino de **criptografía de clave pública (Ed25519)**.
 
-### Casos de Uso Típicos
-
-GhostKnock no es solo para abrir puertos. Es una herramienta flexible para control remoto seguro:
-
-*   **Gestión de Acceso:** Abrir/cerrar temporalmente el acceso a servicios críticos (SSH, VPN, base de datos) solo para tu IP.
-*   **Control de Servicios:** Reiniciar un servicio que no responde (servidor web, aplicación, base de datos) sin necesidad de iniciar sesión.
-*   **Tareas de Emergencia:** Reiniciar o apagar de forma segura un servidor que se ha vuelto inaccesible por otros medios.
-*   **Automatización y Mantenimiento:** Disparar scripts de backup, limpiar cachés, o ejecutar tareas de mantenimiento programadas desde un sistema de CI/CD o un cron job.
-*   **Integración con Firewalls:** Modificar dinámicamente reglas de `iptables` o `nftables`.
+El servidor escucha pasivamente el tráfico de red. Si recibe un paquete con una firma válida, ejecuta la acción asociada. Si la firma es inválida, el paquete es ignorado silenciosamente, haciendo que el servidor sea **indetectable** a escaneos de puertos.
 
 ---
 
-## ✨ Características Principales
+## ✨ Características
 
-*   🔐 **Seguridad Criptográfica:** Cada "knock" es un payload firmado con `ed25519`. El servidor verifica la autenticidad con la clave pública del usuario.
-*   🕵️ **Bajo Perfil (Stealth):** Escucha pasivamente el tráfico de red con `pcap` sin abrir ningún puerto, haciéndolo **invisible** a escaneos de red.
-*   🧩 **Configuración Declarativa:** Un único archivo `config.yaml` define usuarios, claves públicas, IPs permitidas y acciones de forma clara y legible.
-*   ⚙️ **Acciones Flexibles:** Ejecuta cualquier comando del sistema, con plantillas seguras (`text/template`), acciones de reversión automáticas y timeouts.
-*   🛡️ **Defensa Robusta:** Protección anti-replay con ventanas de tiempo, rate limiting por IP y cooldowns configurables por acción.
-*   📜 **Logging Estructurado:** Registra todas las actividades en `/var/log/ghostknockd.log` en un formato clave-valor, ideal para auditoría y `fail2ban`.
-*   📦 **Empaquetado Nativo:** Se integra como un servicio `systemd` y se distribuye como un paquete `.deb` para una instalación y gestión sencillas.
+*   🔐 **Criptografía Fuerte:** Autenticación mediante firmas `Ed25519`. Sin contraseñas ni secretos compartidos.
+*   🧩 **Parámetros Dinámicos:** El cliente puede enviar argumentos (ej. IPs, nombres de servicio) que se inyectan de forma segura en los comandos del servidor.
+*   🛡️ **Seguridad Ofensiva/Defensiva:**
+    *   **Invisible:** No abre puertos TCP.
+    *   **Anti-Replay:** Protección contra ataques de repetición mediante timestamp.
+    *   **Sanitización Estricta:** Los parámetros entrantes pasan por una lista blanca (`Allowlist`) para prevenir inyección de comandos.
+    *   **Anti-DoS:** Verificación criptográfica previa al procesamiento de datos.
+*   ⚡ **Multiplataforma:** Cliente nativo para **Linux** y **Windows**.
+*   ⚙️ **Automatización:** Ideal para tareas de CI/CD, recuperación de desastres y gestión de accesos de emergencia.
 
 ---
 
-## 🚀 Instalación
+## 📦 Instalación
 
-### Opción 1: Paquete .deb (La Vía Fácil para Debian/Ubuntu/Mint)
+### Opción A: Paquetes .deb (Debian/Ubuntu/Mint)
 
-Descarga el último paquete `.deb` desde la [página de Releases de GitHub](https://github.com/soyunomas/GhostKnock/releases/latest).
+Descarga la última versión desde [Releases](https://github.com/soyunomas/GhostKnock/releases).
 
+*   **Para el Servidor (Demonio + Herramientas):**
+    ```bash
+    sudo dpkg -i ghostknock_1.1.0_amd64.deb
+    # Se instala el servicio systemd y se asegura el directorio /etc/ghostknock
+    ```
+
+*   **Para Clientes Remotos (Solo Herramientas):**
+    ```bash
+    sudo dpkg -i ghostknock-client_1.1.0_amd64.deb
+    ```
+
+### Opción B: Ejecutables para Windows
+
+Descarga `ghostknock.exe` y `ghostknock-keygen.exe` desde Releases. No requieren instalación. Úsalos directamente desde PowerShell o CMD.
+
+### Opción C: Compilación Manual
+
+Requiere Go 1.21+ y `libpcap-dev` (en Linux).
 ```bash
-# Reemplaza la URL con el enlace directo al .deb de la última versión
-wget https://github.com/soyunomas/GhostKnock/releases/download/v1.0.0/ghostknock_1.0.0_amd64.deb
-
-# Instala el paquete. dpkg gestionará la copia de archivos y la configuración del servicio.
-sudo dpkg -i ghostknock_1.0.0_amd64.deb
-
-# Si dpkg informa de dependencias faltantes (como libpcap), este comando lo solucionará.
-sudo apt-get -f install
-```
-
-### Opción 2: Desde el Código Fuente (Compilación Manual)
-
-#### Prerrequisitos
-*   Go 1.21+
-*   Librería `libpcap`
-    *   Debian/Ubuntu: `sudo apt-get update && sudo apt-get install -y libpcap-dev build-essential`
-    *   RHEL/CentOS/Fedora: `sudo yum install -y libpcap-devel`
-
-#### Compilación e Instalación
-```bash
-# 1. Clonar el repositorio
 git clone https://github.com/soyunomas/GhostKnock.git
 cd GhostKnock
-
-# 2. Compilar e instalar binarios, configuración y servicio systemd.
-sudo make install
+make build          # Compila para Linux
+make build-windows  # Compila .exe para Windows
 ```
 
 ---
 
-## 🛠️ Configuración y Uso
+## 🚀 Guía de Inicio Rápido
 
-### 1. Generar Claves de Cliente
+### 1. Generar tus Llaves (En tu PC Cliente)
+Necesitas un par de claves. La **privada** se queda en tu PC, la **pública** va al servidor.
 
-En tu máquina local (la que enviará los knocks), utiliza la herramienta `ghostknock-keygen` para crear un par de claves.
-
-#### Uso Estándar
-
-Para generar un par de claves en la ubicación por defecto, simplemente ejecuta el comando sin argumentos:
 ```bash
-# Genera ~/.config/ghostknock/id_ed25519 (privada) y .pub (pública)
+# Linux / Mac
 ghostknock-keygen
+# Salida: Clave pública guardada en ~/.config/ghostknock/id_ed25519.pub
+
+# Windows (PowerShell)
+.\ghostknock-keygen.exe
 ```
-El cliente `ghostknock` buscará automáticamente la clave en esta ubicación.
-
-#### Ubicación Personalizada
-
-Si necesitas gestionar múltiples identidades o guardar la clave en una ruta específica (por ejemplo, para integrarla con otros sistemas), utiliza el flag `-o`:
-```bash
-# Genera un par de claves llamado 'id_staging' en el directorio actual
-ghostknock-keygen -o ./id_staging
-```
-Cuando envíes un knock con esta clave, deberás especificar su ruta con el flag `-key`:
-`ghostknock -host ... -action ... -key ./id_staging`
-
----
-
-En cualquier caso, después de ejecutar el comando, copia la **clave pública** en formato Base64 que se muestra en la terminal. La necesitarás para configurar el usuario en el archivo `config.yaml` del servidor.
+> **Copia la cadena Base64 que aparece en la terminal.** Esa es tu clave pública.
 
 ### 2. Configurar el Servidor
-
-1.  **Crea el archivo de configuración:** El paquete `.deb` o `make install` ya ha instalado una plantilla.
-    ```bash
-    sudo cp /etc/ghostknock/config.yaml.example /etc/ghostknock/config.yaml
-    ```
-2.  **Edita la configuración:**
-    ```bash
-    sudo nano /etc/ghostknock/config.yaml
-    ```
-    Como mínimo, debes:
-    *   Ajustar la `interface` de red.
-    *   Pegar la **clave pública** del cliente en la sección `users`.
-    *   Definir las `actions` que ese usuario puede ejecutar.
-
-### 3. Iniciar el Servicio
-
-Si instalaste el `.deb` o usaste `sudo make install`, el servicio ya está configurado.
-
-```bash
-# Inicia el servicio
-sudo systemctl start ghostknockd
-
-# (Opcional) Verifica que está corriendo correctamente
-sudo systemctl status ghostknockd
-
-# (Opcional) Mira los logs en tiempo real
-sudo journalctl -u ghostknockd -f
-```
-
-### 4. Enviar un Knock
-
-Desde tu máquina cliente, con la clave privada en `~/.config/ghostknock/id_ed25519`:
-
-```bash
-# El cliente buscará la clave por defecto.
-ghostknock -host IP_DEL_SERVIDOR -action open-ssh-port
-```
-
----
-
-## 📄 Parámetros de `config.yaml`
-
-| Sección | Parámetro | Descripción | Valor por Defecto / Ejemplo |
-| :--- | :--- | :--- | :--- |
-| **`listener`** | `interface` | Interfaz de red en la que escuchar. | `"any"` |
-| | `port` | Puerto UDP en el que se esperan los knocks. | `3001` |
-| | `listen_ip` | (Opcional) Escucha solo en una IP específica de la interfaz. | `""` (Cualquiera) |
-| **`logging`** | `log_level` | Nivel de verbosidad: "debug", "info", "warn", "error". | `"info"` |
-| **`daemon`** | `pid_file` | (Opcional) Ruta para crear un archivo PID para systemd. | `"/var/run/ghostknockd.pid"` |
-| **`users`** | `name` | Nombre descriptivo del usuario/cliente. | Requerido |
-| | `public_key` | Clave pública del cliente en formato Base64. | Requerido |
-| | `actions` | Lista de IDs de acciones que el usuario puede ejecutar. | Requerido |
-| | `source_ips`| (Opcional) Restringe los knocks a IPs/CIDRs de origen. | `[]` (Cualquier IP) |
-| **`actions`** | `command` | Comando a ejecutar. `{{.SourceIP}}` se sustituye por la IP del cliente. | Requerido |
-| | `revert_command`| (Opcional) Comando que se ejecuta para revertir la acción principal. | `""` (Sin reversión) |
-| | `revert_delay_seconds`| Segundos a esperar antes de ejecutar `revert_command`. | `0` |
-| | `timeout_seconds`| (Opcional) Segundos máximos de ejecución del comando antes de terminarlo. | `0` (Sin timeout) |
-| | `cooldown_seconds`| (Opcional) Segundos que deben pasar antes de que la misma acción se pueda repetir. | `-1` (Usa el cooldown global) |
-| | `run_as_user`| (Opcional) Ejecuta el comando como un usuario sin privilegios. Prohibido "root". | `""` (root) |
-
----
-
-## 💡 Ejemplos Prácticos de Configuración
-
-Aquí tienes una configuración `actions` con casos de uso comunes para un administrador de sistemas.
+Edita el archivo `/etc/ghostknock/config.yaml`:
 
 ```yaml
-# /etc/ghostknock/config.yaml
-
-# ... (secciones listener, logging, daemon, users) ...
+users:
+  - name: "admin_remoto"
+    public_key: "PEGA_TU_CLAVE_PUBLICA_AQUI_..."
+    actions:
+      - "write-test"
+      - "open-ssh"
 
 actions:
-  # ==========================================================
-  # EJEMPLO 1: Abrir temporalmente el puerto SSH a tu IP
-  # ==========================================================
-  "open-ssh-port":
-    command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
-    revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
-    revert_delay_seconds: 300 # El puerto se cierra automáticamente tras 5 minutos.
-    cooldown_seconds: 60     # No se puede ejecutar más de una vez por minuto.
-
-  # ==========================================================
-  # EJEMPLO 2: Reiniciar el servidor web Nginx
-  # ==========================================================
-  "restart-nginx":
-    command: "systemctl restart nginx"
-    timeout_seconds: 20      # Si tarda más de 20s, se cancela.
-    cooldown_seconds: 120    # Esperar 2 minutos antes de permitir otro reinicio.
-
-  # ==========================================================
-  # EJEMPLO 3: Disparar un script de backup personalizado
-  # ==========================================================
-  "trigger-backup":
-    command: "/usr/local/scripts/backup_databases.sh"
-    timeout_seconds: 900     # Permitir que el backup dure hasta 15 minutos.
-    run_as_user: "backup"    # Ejecutar con un usuario de sistema con privilegios mínimos.
-
-  # ==========================================================
-  # EJEMPLO 4: Limpiar la caché de una aplicación web
-  # ==========================================================
-  "clear-app-cache":
-    command: "rm -rf /var/www/my-app/cache/*"
-    # Ejecutar como el usuario del servidor web previene errores de permisos
-    # y limita el daño potencial si el comando es incorrecto.
-    run_as_user: "www-data"
-    timeout_seconds: 10
-    
-  # ==========================================================
-  # EJEMPLO 5: Reiniciar el servidor (¡USAR CON PRECAUCIÓN!)
-  # ==========================================================
-  "reboot-server":
-    # Un pequeño retardo asegura que la respuesta UDP se envíe antes del reinicio.
-    command: "sleep 2 && reboot"
-    cooldown_seconds: 3600 # No permitir reinicios accidentales seguidos.
-
-  # ==========================================================
-  # EJEMPLO 6: Actualizar todos los paquetes del sistema (apt)
-  # ==========================================================
-  "system-update":
-    command: "apt-get update && apt-get upgrade -y"
-    # Una actualización puede tardar mucho. Un timeout generoso de 15 minutos
-    # previene que el proceso se quede colgado indefinidamente.
-    timeout_seconds: 900
-    # Esta es una operación intensiva. Un cooldown de 1 hora (3600s) previene
-    # que se ejecute repetidamente por accidente o de forma maliciosa.
-    cooldown_seconds: 3600
+  "write-test":
+    command: 'echo "Test OK. P1={{.Params.p1}} P2={{.Params.p2}}" > /tmp/prueba.txt'
+    cooldown_seconds: 0
 ```
+
+### 3. Iniciar el Servicio
+```bash
+sudo systemctl restart ghostknockd
+```
+
+### 4. Enviar tu primer Knock
+```bash
+# Linux
+ghostknock -host IP_DEL_SERVIDOR -action write-test -args "p1=Hola,p2=Mundo"
+
+# Windows
+.\ghostknock.exe -host IP_DEL_SERVIDOR -action write-test -args "p1=Hola,p2=Mundo"
+```
+
+---
+
+## 💡 Recetario: 10 Ejemplos Prácticos
+
+A continuación se presentan configuraciones para `config.yaml` y el comando del cliente correspondiente.
+
+> ⚠️ **Nota de Seguridad sobre Parámetros:**
+> Los argumentos pasados con `-args` solo permiten: **Letras (a-Z), Números (0-9), Puntos (.), Guiones bajos (_) y Guiones medios (-)**.
+> Cualquier otro carácter (espacios, :, /, ;) provocará el rechazo del paquete.
+
+### 1. Test de Verificación (Hola Mundo)
+Crea un archivo para verificar que el sistema procesa parámetros correctamente.
+
+*   **Config (Server):**
+    ```yaml
+    "write-test":
+      command: 'echo "Este es el parametro1={{.Params.p1}}, parametro2={{.Params.p2}}" > /tmp/prueba.txt'
+      cooldown_seconds: 0
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host 127.0.0.1 -action write-test -args "p1=ValorUno,p2=Valor_Dos"
+    ```
+*   **Resultado:** `cat /tmp/prueba.txt` mostrará el contenido.
+
+### 2. Abrir SSH Temporalmente (Port Knocking 2.0)
+Abre el puerto 22 solo para tu IP actual y lo cierra automáticamente tras 5 minutos.
+
+*   **Config (Server):**
+    ```yaml
+    "open-ssh":
+      command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
+      revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
+      revert_delay_seconds: 300
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action open-ssh
+    ```
+
+### 3. Reiniciar Servicios Específicos
+Reinicia un servicio pasando su nombre como parámetro. Útil para servidores web o bases de datos.
+
+*   **Config (Server):**
+    ```yaml
+    "restart-svc":
+      command: "systemctl restart {{.Params.name}}"
+      timeout_seconds: 10
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action restart-svc -args "name=nginx"
+    ```
+
+### 4. Banear IP Atacante (Firewall)
+Si detectas un ataque desde una IP, bloquéala remotamente sin necesidad de entrar por SSH.
+
+*   **Config (Server):**
+    ```yaml
+    "ban-ip":
+      command: "iptables -A INPUT -s {{.Params.target}} -j DROP"
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action ban-ip -args "target=192.168.50.5"
+    ```
+
+### 5. Despliegue Rápido (Git Pull)
+Actualiza el código de una aplicación web para una rama concreta.
+
+*   **Config (Server):**
+    ```yaml
+    "deploy-app":
+      # Ejecutamos como www-data por seguridad
+      run_as_user: "www-data"
+      command: "cd /var/www/html && git fetch && git checkout {{.Params.branch}} && git pull"
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action deploy-app -args "branch=main"
+    ```
+
+### 6. Gestión de Contenedores Docker
+Reinicia un contenedor Docker específico.
+
+*   **Config (Server):**
+    ```yaml
+    "docker-bounce":
+      command: "docker restart {{.Params.container}}"
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action docker-bounce -args "container=api-gateway"
+    ```
+
+### 7. Modo "Pánico" (Lockdown)
+Cierra todo el tráfico entrante nuevo en caso de emergencia de seguridad.
+
+*   **Config (Server):**
+    ```yaml
+    "lockdown":
+      command: "iptables -P INPUT DROP"
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action lockdown
+    ```
+
+### 8. Mantenimiento y Limpieza
+Ejecuta scripts de mantenimiento preexistentes en el servidor.
+
+*   **Config (Server):**
+    ```yaml
+    "cleanup":
+      command: "/opt/scripts/rotate_logs.sh {{.Params.mode}}"
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action cleanup -args "mode=full"
+    ```
+
+### 9. Wake-on-LAN Proxy
+Enciende una máquina de la red interna.
+*Nota: Usamos guiones en la MAC porque los dos puntos (:) no están permitidos en los parámetros.*
+
+*   **Config (Server):**
+    ```yaml
+    "wol-pc":
+      command: "wakeonlan {{.Params.mac}}"
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action wol-pc -args "mac=aa-bb-cc-dd-ee-ff"
+    ```
+
+### 10. Actualización del Sistema
+Lanza una actualización de paquetes del sistema operativo.
+
+*   **Config (Server):**
+    ```yaml
+    "sys-update":
+      command: "apt-get update && apt-get upgrade -y"
+      timeout_seconds: 600
+      cooldown_seconds: 3600
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action sys-update
+    ```
+
+---
+
+## ⚙️ Referencia de Configuración Completa (`config.yaml`)
+
+Aquí se detallan todas las opciones disponibles para configurar el demonio.
+
+| Sección | Campo | Tipo | Obligatorio | Descripción |
+| :--- | :--- | :--- | :---: | :--- |
+| **`listener`** | `interface` | string | ✅ | Interfaz de red para escuchar (ej: `eth0`, `wlan0`, `any`). |
+| | `port` | int | ✅ | Puerto UDP a escuchar (ej: `3001`). |
+| | `listen_ip` | string | ❌ | (Opcional) Si se define, escucha solo en esta IP específica. Por defecto: `""` (Todas). |
+| **`logging`** | `log_level` | string | ✅ | Nivel de log: `debug`, `info`, `warn`, `error`. |
+| **`daemon`** | `pid_file` | string | ❌ | Ruta al archivo PID (ej: `/var/run/ghostknockd.pid`). |
+| **`users`** | `name` | string | ✅ | Identificador del usuario para los logs. |
+| | `public_key` | string | ✅ | Clave pública `ed25519` en formato Base64. |
+| | `actions` | list | ✅ | Lista de IDs de acciones que este usuario puede ejecutar. |
+| | `source_ips` | list | ❌ | Lista de IPs/CIDRs permitidos (ej: `["192.168.1.50/32"]`). Si está vacío, permite todas. |
+| **`actions`** | *(key)* | string | ✅ | El ID de la acción (debe coincidir con `users.actions`). |
+| | `command` | string | ✅ | Comando de shell a ejecutar. Soporta variables `{{.Params.x}}` y `{{.SourceIP}}`. |
+| | `run_as_user` | string | ❌ | Usuario del sistema que ejecuta el comando. Por defecto: `root` (si el demonio es root). |
+| | `timeout_seconds` | int | ❌ | Tiempo máximo de ejecución. Si se excede, el comando se mata (SIGKILL). |
+| | `cooldown_seconds` | int | ❌ | Tiempo de espera antes de permitir ejecutar esta acción de nuevo. `-1` usa el global (15s). |
+| | `revert_command` | string | ❌ | Comando que se ejecuta automáticamente tras el retraso. |
+| | `revert_delay_seconds`| int | ❌ | Segundos a esperar antes de ejecutar `revert_command`. |
 
 ---
 
 ## 📄 Licencia
 
-Este proyecto está bajo la **Licencia MIT**. Consulta el archivo `LICENSE` para más información.
+Este proyecto se distribuye bajo la **Licencia MIT**.

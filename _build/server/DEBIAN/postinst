@@ -1,0 +1,36 @@
+#!/bin/sh
+# Salir inmediatamente si un comando falla.
+set -e
+
+# Definir permisos seguros
+CONFIG_DIR="/etc/ghostknock"
+CONFIG_FILE="$CONFIG_DIR/config.yaml"
+
+if [ "$1" = "configure" ]; then
+    echo "Configurando permisos de seguridad..."
+    
+    # 1. Asegurar que el directorio pertenece a root y es privado (0700)
+    if [ -d "$CONFIG_DIR" ]; then
+        chown root:root "$CONFIG_DIR"
+        chmod 700 "$CONFIG_DIR"
+        echo "  - Directorio $CONFIG_DIR blindado (0700)."
+    fi
+
+    # 2. Si existe el archivo de configuración real, asegurarlo también (0600)
+    if [ -f "$CONFIG_FILE" ]; then
+        chown root:root "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
+        echo "  - Archivo de configuración asegurado (0600)."
+    fi
+
+    echo "Recargando demonio de Systemd..."
+    systemctl daemon-reload
+
+    # Habilitar el servicio solo en instalación inicial
+    if [ -z "$2" ]; then
+        echo "Habilitando el servicio ghostknockd..."
+        systemctl enable ghostknockd.service
+    fi
+fi
+
+exit 0

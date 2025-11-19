@@ -2,15 +2,35 @@
 # Salir inmediatamente si un comando falla.
 set -e
 
-echo "Recargando demonio de Systemd..."
-systemctl daemon-reload
+# Definir permisos seguros
+CONFIG_DIR="/etc/ghostknock"
+CONFIG_FILE="$CONFIG_DIR/config.yaml"
 
-# Habilitar el servicio para que se inicie en el arranque.
-# La condición 'if' asegura que esto solo ocurra en la instalación inicial,
-# no en las actualizaciones.
 if [ "$1" = "configure" ]; then
-    echo "Habilitando el servicio ghostknockd..."
-    systemctl enable ghostknockd.service
+    echo "Configurando permisos de seguridad..."
+    
+    # 1. Asegurar que el directorio pertenece a root y es privado (0700)
+    if [ -d "$CONFIG_DIR" ]; then
+        chown root:root "$CONFIG_DIR"
+        chmod 700 "$CONFIG_DIR"
+        echo "  - Directorio $CONFIG_DIR blindado (0700)."
+    fi
+
+    # 2. Si existe el archivo de configuración real, asegurarlo también (0600)
+    if [ -f "$CONFIG_FILE" ]; then
+        chown root:root "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
+        echo "  - Archivo de configuración asegurado (0600)."
+    fi
+
+    echo "Recargando demonio de Systemd..."
+    systemctl daemon-reload
+
+    # Habilitar el servicio solo en instalación inicial
+    if [ -z "$2" ]; then
+        echo "Habilitando el servicio ghostknockd..."
+        systemctl enable ghostknockd.service
+    fi
 fi
 
 exit 0

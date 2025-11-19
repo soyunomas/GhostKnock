@@ -9,35 +9,42 @@ import (
 	"log/slog"
 	"net"
 	"os/exec"
-	"os/user" // <<-- NUEVA IMPORTACIÓN
-	"strconv" // <<-- NUEVA IMPORTACIÓN
-	"syscall" // <<-- NUEVA IMPORTACIÓN
+	"os/user"
+	"regexp" // <<-- NUEVA IMPORTACIÓN
+	"strconv"
+	"syscall"
 	"text/template"
 	"time"
 
 	"github.com/your-org/ghostknock/internal/config"
 )
 
-// Execute procesa una acción, la ejecuta y, si está configurado, programa su reversión.
-func Execute(action config.Action, sourceIP net.IP) error {
+// safeParamRegex define la lista blanca de caracteres permitidos en los parámetros.
+// Solo permite letras, números, puntos, guiones bajos y guiones medios.
+// Esto previene inyecciones de comandos (espacios, puntos y coma, pipes, etc.)
+// y navegación de directorios (barras).
+var safeParamRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// Execute procesa una acción, valida sus parámetros, la ejecuta y programa su reversión.
+// Ahora acepta un mapa de parámetros sanitizados.
+func Execute(action config.Action, sourceIP net.IP, params map[string]string) error {
 	slog.Debug("Ejecutando acción", "source_ip", sourceIP.String())
 
-	// Ejecutar el comando principal.
-	if err := runCommand("main", action.Command, action.TimeoutSeconds, action.RunAsUser, sourceIP); err != nil {
-		// Envolvemos el error para dar más contexto en los logs.
+	// Ejecutar el comando principal pasando los parámetros.
+	if err := runCommand("main", action.Command, action.TimeoutSeconds, action.RunAsUser, sourceIP, params); err != nil {
 		return fmt.Errorf("falló la ejecución del comando principal: %w", err)
 	}
 
-	// Si hay un comando de reversión y un retardo, programarlo en una nueva goroutine.
+	// Si hay un comando de reversión y un retardo, programarlo.
 	if action.RevertCommand != "" && action.RevertDelaySeconds > 0 {
-		go scheduleRevert(action, sourceIP)
+		go scheduleRevert(action, sourceIP, params)
 	}
 
 	return nil
 }
 
 // scheduleRevert espera el tiempo especificado y luego ejecuta el comando de reversión.
-func scheduleRevert(action config.Action, sourceIP net.IP) {
+func scheduleRevert(action config.Action, sourceIP net.IP, params map[string]string) {
 	delay := time.Duration(action.RevertDelaySeconds) * time.Second
 	slog.Info(
 		"Programando reversión de acción",
@@ -47,8 +54,8 @@ func scheduleRevert(action config.Action, sourceIP net.IP) {
 	time.Sleep(delay)
 
 	slog.Info("Ejecutando reversión", "source_ip", sourceIP.String())
-	if err := runCommand("revert", action.RevertCommand, action.TimeoutSeconds, action.RunAsUser, sourceIP); err != nil {
-		// Logueamos el error pero no podemos hacer mucho más, ya que estamos en una goroutine.
+	// La reversión también recibe los parámetros (ej. para cerrar el puerto a una IP específica enviada como param).
+	if err := runCommand("revert", action.RevertCommand, action.TimeoutSeconds, action.RunAsUser, sourceIP, params); err != nil {
 		slog.Error(
 			"Falló la ejecución del comando de reversión",
 			"source_ip", sourceIP.String(),
@@ -58,11 +65,27 @@ func scheduleRevert(action config.Action, sourceIP net.IP) {
 }
 
 // runCommand es el núcleo de la ejecución segura.
-func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUser string, sourceIP net.IP) error {
+func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string) error {
+	// 1. VALIDACIÓN DE SEGURIDAD DE PARÁMETROS (Sanitización Estricta)
+	if len(params) > 0 {
+		for key, value := range params {
+			if !safeParamRegex.MatchString(value) {
+				return fmt.Errorf("SEGURIDAD: El valor del parámetro '%s' contiene caracteres inválidos. Solo se permiten [a-zA-Z0-9._-]", key)
+			}
+			// Validación redundante pero explícita contra path traversal relativo.
+			if value == ".." {
+				return fmt.Errorf("SEGURIDAD: Uso de '..' no permitido en parámetros")
+			}
+		}
+	}
+
+	// 2. PREPARACIÓN DE DATOS PARA LA PLANTILLA
 	templateData := struct {
 		SourceIP string
+		Params   map[string]string
 	}{
 		SourceIP: sourceIP.String(),
+		Params:   params,
 	}
 
 	tmpl, err := template.New("cmd").Parse(commandTemplate)
@@ -82,7 +105,7 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	if timeoutSeconds > 0 {
 		timeoutDuration := time.Duration(timeoutSeconds) * time.Second
 		ctx, cancel = context.WithTimeout(ctx, timeoutDuration)
-		defer cancel() // Asegura que los recursos del contexto se liberen.
+		defer cancel()
 	}
 
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", finalCommand)
@@ -116,34 +139,28 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 		"type", commandType,
 		"command", finalCommand,
 		"timeout_seconds", timeoutSeconds,
-		"run_as_user", runAsUser, // <<-- Logueo del usuario
+		"run_as_user", runAsUser,
 		"source_ip", sourceIP.String(),
 	)
 
 	err = cmd.Run()
 
-	// Registrar siempre la salida para una depuración completa.
 	if stdout.Len() > 0 {
 		slog.Debug("Comando ejecutado (stdout)", "type", commandType, "output", stdout.String())
 	}
 	if stderr.Len() > 0 {
-		// La salida de error estándar se registra como un aviso.
 		slog.Warn("Comando ejecutado (stderr)", "type", commandType, "output", stderr.String())
 	}
 
-	// --- MANEJO DE ERRORES MEJORADO ---
 	if err != nil {
-		// Comprobar si el error fue causado por el timeout de nuestro contexto.
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			slog.Warn("Comando terminado por timeout",
 				"type", commandType,
 				"timeout_seconds", timeoutSeconds,
 				"command", finalCommand,
 			)
-			// Devolvemos un error específico para el timeout.
 			return fmt.Errorf("el comando excedió el timeout de %d segundos", timeoutSeconds)
 		}
-		// Si es otro tipo de error, lo reportamos como tal.
 		return fmt.Errorf("el comando falló: %w. Stderr: %s", err, stderr.String())
 	}
 

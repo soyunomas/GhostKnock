@@ -1,0 +1,10 @@
+Package: ghostknock-client
+Version: 1.1.0
+Architecture: amd64
+Maintainer: Soyunomas https://github.com/soyunomas/GhostKnock
+Description: Herramientas cliente para GhostKnock.
+ Incluye el cliente 'ghostknock' para enviar solicitudes y
+ 'ghostknock-keygen' para generar identidades criptográficas.
+ Este paquete no requiere privilegios de root ni dependencias externas.
+Conflicts: ghostknock (<< 1.1.0)
+Replaces: ghostknock (<< 1.1.0)

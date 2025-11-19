@@ -25,7 +25,7 @@ import (
 
 const (
 	replayWindowSeconds      = 5
-	actionCooldownSeconds    = 15 // <<-- ESTE ES AHORA EL COOLDOWN GLOBAL POR DEFECTO
+	actionCooldownSeconds    = 15
 	cacheCleanupInterval     = 1 * time.Minute
 	rateLimitEventsPerSecond = 1.0
 	rateLimitBurst           = 3
@@ -51,7 +51,6 @@ func main() {
 	configFile := flag.String("config", "config.yaml", "Ruta al archivo de configuración YAML")
 	flag.Parse()
 
-	// Cargar la configuración ANTES de inicializar el logger final.
 	tempLogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	cfg, err := config.LoadConfig(*configFile)
 	if err != nil {
@@ -59,7 +58,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// --- INICIALIZACIÓN DEL LOGGER ESTRUCTURADO A ARCHIVO ---
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.Fatalf("FATAL: No se pudo abrir el archivo de log en %s: %v. ¿Ejecutaste con sudo?", logFilePath, err)
@@ -86,7 +84,6 @@ func main() {
 
 	slog.Info("Iniciando demonio GhostKnockd...")
 
-	// --- GESTIÓN DEL ARCHIVO PID ---
 	if cfg.Daemon.PIDFile != "" {
 		pid := os.Getpid()
 		pidStr := strconv.Itoa(pid)
@@ -96,7 +93,6 @@ func main() {
 		}
 		slog.Info("Archivo PID creado", "path", cfg.Daemon.PIDFile, "pid", pid)
 
-		// Usamos defer para asegurar que el archivo PID se elimina al salir de main.
 		defer func() {
 			if err := os.Remove(cfg.Daemon.PIDFile); err != nil {
 				slog.Warn("No se pudo eliminar el archivo PID al salir", "path", cfg.Daemon.PIDFile, "error", err)
@@ -105,7 +101,6 @@ func main() {
 			}
 		}()
 	}
-	// ------------------------------------
 
 	slog.Info(
 		"Configuración cargada con éxito",
@@ -120,13 +115,11 @@ func main() {
 		ipLimiters:      make(map[string]*ipLimiter),
 	}
 
-	// --- CONFIGURACIÓN DEL GRACEFUL SHUTDOWN ---
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
-	// ---------------------------------------------
 
 	go server.startCacheCleaner()
 	go server.startLimiterCleaner()
@@ -194,7 +187,6 @@ func (s *Server) startCacheCleaner() {
 	for range ticker.C {
 		s.cacheMutex.Lock()
 		purgedCount := 0
-		// Usamos un umbral de limpieza generoso, por ejemplo, el doble del cooldown por defecto.
 		expirationDuration := time.Duration(actionCooldownSeconds*2) * time.Second
 		for key, lastSeen := range s.actionCooldowns {
 			if time.Since(lastSeen) > expirationDuration {
@@ -210,12 +202,14 @@ func (s *Server) startCacheCleaner() {
 }
 
 func (s *Server) processKnock(packetInfo listener.PacketInfo) {
+	// 1. RATE LIMITING
 	limiter := s.getLimiter(packetInfo.SourceIP)
 	if !limiter.Allow() {
 		slog.Warn("Paquete descartado", "reason", "rate_limit_exceeded", "source_ip", packetInfo.SourceIP.String())
 		return
 	}
 
+	// 2. VALIDACIÓN DE ESTRUCTURA BÁSICA
 	rawPayload := packetInfo.Payload
 	if len(rawPayload) <= ed25519.SignatureSize {
 		return
@@ -224,42 +218,41 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	signature := rawPayload[:ed25519.SignatureSize]
 	serializedPayload := rawPayload[ed25519.SignatureSize:]
 
-	payload, err := protocol.DeserializePayload(serializedPayload)
-	if err != nil {
-		slog.Warn("Paquete descartado", "reason", "payload_deserialization_failed", "source_ip", packetInfo.SourceIP.String(), "error", err)
-		return
-	}
-
-	timestamp := time.Unix(0, payload.Timestamp)
-	age := time.Since(timestamp)
-	if age < 0 || age > (replayWindowSeconds*time.Second) {
-		slog.Warn("Paquete descartado", "reason", "outside_replay_window", "source_ip", packetInfo.SourceIP.String(), "age_seconds", age.Seconds())
-		return
-	}
-
+	// 3. VERIFICACIÓN CRIPTOGRÁFICA TEMPRANA
 	var authorizedUser *config.User
-	var isSignatureValid bool
 	for i := range s.config.Users {
 		user := &s.config.Users[i]
 		if ed25519.Verify(user.DecodedPublicKey, serializedPayload, signature) {
-			isSignatureValid = true
-			if isActionAllowed(payload.ActionID, user.AllowedActions) {
-				authorizedUser = user
-				break
-			}
+			authorizedUser = user
+			break
 		}
 	}
 
-	if !isSignatureValid {
+	if authorizedUser == nil {
 		slog.Warn("Paquete descartado", "reason", "invalid_signature", "source_ip", packetInfo.SourceIP.String())
 		return
 	}
-	if authorizedUser == nil {
-		slog.Warn("Paquete descartado", "reason", "unauthorized_action", "source_ip", packetInfo.SourceIP.String(), "action_id", payload.ActionID)
+
+	// 4. DESERIALIZACIÓN SEGURA (Solo si la firma es válida)
+	payload, err := protocol.DeserializePayload(serializedPayload)
+	if err != nil {
+		slog.Warn("Paquete descartado", "reason", "payload_deserialization_failed", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "error", err)
 		return
 	}
 
-	// <<-- NUEVA COMPROBACIÓN DE IP DE ORIGEN
+	// 5. VALIDACIONES DE NEGOCIO
+	timestamp := time.Unix(0, payload.Timestamp)
+	age := time.Since(timestamp)
+	if age < 0 || age > (replayWindowSeconds*time.Second) {
+		slog.Warn("Paquete descartado", "reason", "outside_replay_window", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "age_seconds", age.Seconds())
+		return
+	}
+
+	if !isActionAllowed(payload.ActionID, authorizedUser.AllowedActions) {
+		slog.Warn("Paquete descartado", "reason", "unauthorized_action", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "action_id", payload.ActionID)
+		return
+	}
+
 	if len(authorizedUser.SourceCIDRs) > 0 {
 		isIPAllowed := false
 		for _, cidr := range authorizedUser.SourceCIDRs {
@@ -279,15 +272,13 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		}
 	}
 
-	// --- LÓGICA DE COOLDOWN DINÁMICO ---
+	// 6. LÓGICA DE COOLDOWN
 	actionDef, ok := s.config.Actions[payload.ActionID]
 	if !ok {
 		slog.Error("Inconsistencia de configuración: la acción autorizada no existe", "action_id", payload.ActionID)
 		return
 	}
 
-	// Determinar el período de cooldown efectivo.
-	// Por defecto es el global. Si la acción tiene uno >= 0, este lo sobreescribe.
 	effectiveCooldown := time.Duration(actionCooldownSeconds) * time.Second
 	if actionDef.CooldownSeconds >= 0 {
 		effectiveCooldown = time.Duration(actionDef.CooldownSeconds) * time.Second
@@ -295,7 +286,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 
 	cooldownKey := fmt.Sprintf("%s:%s", authorizedUser.PublicKeyB64, payload.ActionID)
 
-	// Solo realizamos la comprobación si el cooldown es mayor que cero.
 	if effectiveCooldown > 0 {
 		s.cacheMutex.RLock()
 		lastExecutionTime, onCooldown := s.actionCooldowns[cooldownKey]
@@ -316,7 +306,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 			}
 		}
 	}
-	// ------------------------------------
 
 	s.cacheMutex.Lock()
 	s.actionCooldowns[cooldownKey] = time.Now()
@@ -328,7 +317,9 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		"action_id", payload.ActionID,
 	)
 
-	if err := executor.Execute(actionDef, packetInfo.SourceIP); err != nil {
+	// 7. EJECUCIÓN CON PARÁMETROS
+	// Aquí es donde se pasan los params deserializados al ejecutor seguro.
+	if err := executor.Execute(actionDef, packetInfo.SourceIP, payload.Params); err != nil {
 		slog.Error("Falló la ejecución de la acción", "action_id", payload.ActionID, "user", authorizedUser.Name, "error", err)
 	}
 }
