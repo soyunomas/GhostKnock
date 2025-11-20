@@ -263,11 +263,16 @@ Aquí se detallan todas las opciones disponibles para configurar el demonio.
 
 | Sección | Campo | Tipo | Obligatorio | Descripción |
 | :--- | :--- | :--- | :---: | :--- |
-| **`listener`** | `interface` | string | ✅ | Interfaz de red para escuchar (ej: `eth0`, `wlan0`, `any`). |
+| **`listener`** | `interface` | string | ✅ | Interfaz de red para escuchar (ej: `eth0`, `any`). |
 | | `port` | int | ✅ | Puerto UDP a escuchar (ej: `3001`). |
 | | `listen_ip` | string | ❌ | (Opcional) Si se define, escucha solo en esta IP específica. Por defecto: `""` (Todas). |
 | **`logging`** | `log_level` | string | ✅ | Nivel de log: `debug`, `info`, `warn`, `error`. |
 | **`daemon`** | `pid_file` | string | ❌ | Ruta al archivo PID (ej: `/var/run/ghostknockd.pid`). |
+| **`security`** | *(opcional)* | | | |
+| | `replay_window_seconds` | int | ❌ | Ventana de tiempo (segundos) para aceptar un knock. Aumentar para tolerar desfase horario, pero incrementa riesgo de replay. Por defecto: `5`. |
+| | `default_action_cooldown_seconds` | int | ❌ | Cooldown global (segundos) para acciones sin `cooldown_seconds` propio. Por defecto: `15`. |
+| | `rate_limit_per_second` | float | ❌ | (Avanzado) Paquetes por segundo permitidos por IP para Anti-DoS. Por defecto: `1.0`. |
+| | `rate_limit_burst` | int | ❌ | (Avanzado) Ráfaga de paquetes permitida por IP para Anti-DoS. Por defecto: `3`. |
 | **`users`** | `name` | string | ✅ | Identificador del usuario para los logs. |
 | | `public_key` | string | ✅ | Clave pública `ed25519` en formato Base64. |
 | | `actions` | list | ✅ | Lista de IDs de acciones que este usuario puede ejecutar. |
@@ -276,7 +281,7 @@ Aquí se detallan todas las opciones disponibles para configurar el demonio.
 | | `command` | string | ✅ | Comando de shell a ejecutar. Soporta variables `{{.Params.x}}` y `{{.SourceIP}}`. |
 | | `run_as_user` | string | ❌ | Usuario del sistema que ejecuta el comando. Por defecto: `root` (si el demonio es root). |
 | | `timeout_seconds` | int | ❌ | Tiempo máximo de ejecución. Si se excede, el comando se mata (SIGKILL). |
-| | `cooldown_seconds` | int | ❌ | Tiempo de espera antes de permitir ejecutar esta acción de nuevo. `-1` usa el global (15s). |
+| | `cooldown_seconds` | int | ❌ | Tiempo de espera antes de permitir ejecutar esta acción de nuevo. `0` sin cooldown, `-1` usa el global. |
 | | `revert_command` | string | ❌ | Comando que se ejecuta automáticamente tras el retraso. |
 | | `revert_delay_seconds`| int | ❌ | Segundos a esperar antes de ejecutar `revert_command`. |
 
