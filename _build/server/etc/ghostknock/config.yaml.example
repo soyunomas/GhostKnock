@@ -1,134 +1,232 @@
 # ==============================================================================
-# Archivo de Configuración de Ejemplo para GhostKnockd
+# GHOSTKNOCK v1.1.0 - Archivo de Configuración Maestro (Ejemplo)
 # ==============================================================================
-# Este archivo define el comportamiento completo del demonio GhostKnock.
-# Copie este archivo a /etc/ghostknock/config.yaml y edítelo según sus necesidades.
+# Este archivo define el comportamiento del demonio. Contiene ejemplos avanzados.
+#
+# INSTRUCCIONES DE INSTALACIÓN:
+# 1. Copie este archivo: sudo cp config.yaml.example /etc/ghostknock/config.yaml
+# 2. Genere sus claves:  ghostknock-keygen (en su máquina cliente)
+# 3. Edite el archivo:   sudo nano /etc/ghostknock/config.yaml
+# 4. Asegure permisos:   sudo chmod 600 /etc/ghostknock/config.yaml
+# 5. Reinicie servicio:  sudo systemctl restart ghostknockd
+# ==============================================================================
 
 # ------------------------------------------------------------------------------
-# Configuración del Listener de Red
+# 1. CONFIGURACIÓN DEL LISTENER (RED)
 # ------------------------------------------------------------------------------
-# Define cómo GhostKnock escucha los paquetes en la red.
 listener:
-  # La interfaz de red en la que escuchar.
-  # - "any": Escucha en todas las interfaces de red disponibles.
-  # - "eth0", "enp3s0", "lo": Escucha solo en una interfaz específica.
+  # Interfaz de red. "any" escucha en todas. Para producción, use la interfaz
+  # pública específica (ej. "eth0", "ens33") para reducir la superficie de ataque.
   interface: "any"
 
-  # El puerto UDP en el que se esperan los "knocks".
-  # Asegúrese de que este puerto no esté en uso por otro servicio, aunque
-  # GhostKnock no lo "abre" formalmente, solo escucha el tráfico dirigido a él.
+  # Puerto UDP. GhostKnock NO responde a nada en este puerto.
+  # Es invisible a escaneos (Nmap reportará "open|filtered" o "closed").
   port: 3001
 
-  # (OPCIONAL) La dirección IP específica en la que escuchar.
-  # Por defecto, si se omite esta línea, GhostKnock procesará los knocks
-  # dirigidos a CUALQUIER dirección IP asignada a la interfaz especificada.
-  # Si define una IP aquí, solo se procesarán los knocks enviados
-  # explícimanente a esa dirección IP de destino.
-  # Esto es útil en servidores con múltiples IPs en una misma interfaz.
-  # listen_ip: "192.168.1.100"
+  # (Opcional) Escuchar solo en una IP específica de la interfaz.
+  # listen_ip: "203.0.113.10"
 
 # ------------------------------------------------------------------------------
-# Configuración de Logging
+# 2. LOGGING Y PROCESO
 # ------------------------------------------------------------------------------
-# Controla la verbosidad y el formato de los registros del servidor.
 logging:
-  # Nivel de verbosidad de los logs.
-  # Valores válidos: "debug", "info", "warn", "error".
-  # - "debug": Muy verboso, útil para depurar problemas.
-  # - "info":  Nivel por defecto, registra eventos importantes.
-  # - "warn":  Registra advertencias que no son errores críticos.
-  # - "error": Solo registra errores graves.
+  # Niveles: "debug" (todo), "info" (actividad normal), "warn", "error".
   log_level: "info"
 
-# ------------------------------------------------------------------------------
-# Configuración del Demonio
-# ------------------------------------------------------------------------------
-# Opciones que controlan el comportamiento del proceso del servidor.
 daemon:
-  # (OPCIONAL) Ruta para crear un archivo PID.
-  # Si se especifica, GhostKnockd escribirá su ID de proceso en este archivo
-  # al iniciar y lo eliminará al detenerse limpiamente.
-  # Esto es muy útil para la integración con systemd, monit, u otros scripts.
-  # El directorio debe ser escribible por el usuario que ejecuta el demonio.
+  # Archivo PID para gestión de procesos (systemd/monit).
   pid_file: "/var/run/ghostknockd.pid"
 
-
 # ------------------------------------------------------------------------------
-# Configuración de Usuarios y Permisos
+# 3. USUARIOS AUTORIZADOS
 # ------------------------------------------------------------------------------
-# Lista de clientes autorizados para enviar knocks.
 users:
-  - name: "admin_laptop"
-    # La clave pública en formato Base64, generada por `ghostknock-keygen`.
-    # Cada usuario DEBE tener una clave única.
-    public_key: "UYNBBmAIaDOatBurz96BKIBixceO1z46WCmkcWzrdfw="
-
-    # (OPCIONAL, RECOMENDADO) Lista de IPs o rangos CIDR permitidos para este usuario.
-    # Si se define, un knock válido solo será aceptado si proviene de una de estas IPs.
-    # Es una capa de seguridad adicional muy potente.
-    # IMPORTANTE: Se debe usar la notación CIDR completa.
+  # --- ADMIN (Acceso Total) ---
+  - name: "sysadmin_master"
+    # [IMPORTANTE] Reemplace esto con la salida de 'ghostknock-keygen'
+    public_key: "PEGAR_AQUI_SU_CLAVE_PUBLICA_BASE64_GENERADA_CON_KEYGEN"
+    
+    # (Opcional) Seguridad extra: Solo aceptar knocks desde estas redes.
     source_ips:
-      - "84.120.30.45/32"  # IP estática de la oficina
-      - "192.168.1.0/24"    # Red local de casa
-
-    # Lista de identificadores de acciones que este usuario tiene permitido ejecutar.
-    # Estos deben coincidir con una de las acciones definidas en la sección "actions".
+      - "192.168.1.0/24"   # Red de Gestión
+      - "80.50.10.0/24"    # VPN Corporativa
+    
+    # Acciones permitidas para este usuario
     actions:
-      - "open-ssh-port"
-      - "restart-webserver"
-      - "long-running-task"
-      - "clear-app-cache"
+      - "open-ssh"
+      - "open-vpn"
+      - "lockdown"
+      - "ban-ip"
+      - "sys-update"
+      - "docker-restart"
+      - "wol"
 
-  - name: "dev_workstation"
-    public_key: "UYNBBmAIaDOatBurz96BKIBixceO1z46WCmkcWzrdfw="
-    # Este usuario no tiene `source_ips`, por lo que puede enviar knocks desde cualquier IP.
+  # --- DEPLOY BOT (Acceso Limitado) ---
+  - name: "ci_cd_pipeline"
+    public_key: "PEGAR_AQUI_OTRA_CLAVE_PUBLICA_PARA_EL_BOT"
+    # Sin source_ips porque las IPs de la nube cambian.
     actions:
-      - "create-test-file"
-#     - "trigger-backup"
-
+      - "deploy-web"
+      - "clear-cache"
 
 # ------------------------------------------------------------------------------
-# Definición de Acciones Disponibles
+# 4. CATÁLOGO DE ACCIONES (20+ EJEMPLOS)
 # ------------------------------------------------------------------------------
-# Un mapa de todas las acciones que el servidor puede ejecutar.
+# Variables Disponibles:
+#   {{.SourceIP}}   -> La IP desde donde se envió el knock.
+#   {{.Params.key}} -> Argumento dinámico enviado con -args "key=valor".
+#
+# REGLAS DE SEGURIDAD PARA PARÁMETROS:
+#   - Solo permitidos: a-z, A-Z, 0-9, . (punto), _ (guion bajo), - (guion).
+#   - NO permitidos: Espacios, /, \, ;, :, |, &.
+# ------------------------------------------------------------------------------
+
 actions:
-  "open-ssh-port":
+
+  # ============================================================================
+  # CATEGORÍA A: GESTIÓN DE ACCESO Y FIREWALL
+  # ============================================================================
+
+  # 1. Acceso SSH Temporal (Clásico)
+  # Abre el puerto 22 solo para tu IP, lo cierra a los 5 min.
+  "open-ssh":
     command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
     revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
     revert_delay_seconds: 300
-    # Esta acción necesita privilegios de root, por lo que NO se define 'run_as_user'.
-    # El demonio ghostknockd (ejecutado como root) la ejecutará como root.
 
-  "restart-webserver":
+  # 2. Acceso VPN (Wireguard/OpenVPN)
+  # Similar al SSH, pero para el puerto UDP de la VPN (ej. 51820).
+  "open-vpn":
+    command: "iptables -I INPUT 1 -p udp -s {{.SourceIP}} --dport 51820 -j ACCEPT"
+    revert_command: "iptables -D INPUT -p udp -s {{.SourceIP}} --dport 51820 -j ACCEPT"
+    revert_delay_seconds: 3600 # 1 hora de acceso para establecer túnel
+
+  # 3. Banear IP Atacante (Dinámico)
+  # Uso: ghostknock ... -action ban-ip -args "target=1.2.3.4"
+  "ban-ip":
+    command: "iptables -A INPUT -s {{.Params.target}} -j DROP"
+    # Sin reversión automática.
+
+  # 4. Desbanear IP (Dinámico)
+  # Uso: ghostknock ... -action unban-ip -args "target=1.2.3.4"
+  "unban-ip":
+    command: "iptables -D INPUT -s {{.Params.target}} -j DROP"
+
+  # 5. Whitelist de Oficina (Rango Completo)
+  # Permite acceso total a una subred específica temporalmente.
+  "whitelist-office":
+    command: "iptables -I INPUT 1 -s {{.Params.subnet}} -j ACCEPT"
+    revert_command: "iptables -D INPUT -s {{.Params.subnet}} -j ACCEPT"
+    revert_delay_seconds: 28800 # 8 horas (jornada laboral)
+
+  # ============================================================================
+  # CATEGORÍA B: GESTIÓN DE SERVICIOS (SYSTEMD)
+  # ============================================================================
+
+  # 6. Reiniciar Nginx (Fijo)
+  "restart-nginx":
     command: "systemctl restart nginx"
-    revert_command: ""
-    timeout_seconds: 15
+    timeout_seconds: 10
+    cooldown_seconds: 30
+
+  # 7. Reiniciar Servicio Genérico (Dinámico)
+  # Uso: ghostknock ... -action restart-svc -args "name=mysql"
+  "restart-svc":
+    command: "systemctl restart {{.Params.name}}"
+    timeout_seconds: 20
     cooldown_seconds: 60
 
-  "trigger-backup":
-    command: "/usr/local/bin/backup.sh"
-    timeout_seconds: 600
-    cooldown_seconds: 3600
+  # 8. Estado de Servicio (Log a archivo temporal para debug)
+  # Uso: ghostknock ... -action status-svc -args "name=ssh"
+  "status-svc":
+    command: "systemctl status {{.Params.name}} > /tmp/gk_status_{{.Params.name}}.log"
 
-  "create-test-file":
-    command: "echo \"Knock válido de {{.SourceIP}} a las $(date)\" > /tmp/ghostknock_success.txt"
-    revert_command: "rm /tmp/ghostknock_success.txt"
-    revert_delay_seconds: 60
-    cooldown_seconds: 0
-    # (OPCIONAL) Usuario del sistema como el cual se ejecutará el comando.
-    # Esto aplica el principio de mínimo privilegio. El usuario debe existir.
-    # Prohibido usar 'root'.
-    run_as_user: "nobody"
+  # ============================================================================
+  # CATEGORÍA C: GESTIÓN DE DOCKER
+  # ============================================================================
 
-  "long-running-task":
-    command: "echo 'Iniciando tarea larga...' && sleep 10 && echo 'Tarea finalizada (no deberías ver esto)'"
-    timeout_seconds: 3
+  # 9. Reiniciar Contenedor
+  # Uso: ghostknock ... -action docker-restart -args "container=api-v1"
+  "docker-restart":
+    command: "docker restart {{.Params.container}}"
+    timeout_seconds: 30
 
-  "clear-app-cache":
-    command: "rm -rf /var/www/my-app/cache/*"
-    # Este comando es peligroso si se ejecuta como root. Al ejecutarlo como
-    # el usuario del servidor web, limitamos el daño potencial solo a los
-    # archivos que ese usuario posee.
+  # 10. Parar Contenedor
+  "docker-stop":
+    command: "docker stop {{.Params.container}}"
+
+  # 11. Logs de Contenedor (Últimas 100 líneas a un fichero expuesto o tmp)
+  "docker-logs":
+    command: "docker logs --tail 100 {{.Params.container}} > /var/www/html/hidden/logs.txt"
+    run_as_user: "www-data" # Ejecutar con usuario restringido
+
+  # ============================================================================
+  # CATEGORÍA D: DESARROLLO Y DEPLOY (CI/CD)
+  # ============================================================================
+
+  # 12. Despliegue de Rama Git
+  # Uso: ghostknock ... -action deploy-web -args "branch=main"
+  "deploy-web":
+    run_as_user: "www-data" # SEGURIDAD: Nunca desplegar como root
+    command: "cd /var/www/app && git fetch && git checkout {{.Params.branch}} && git pull && composer install"
+    timeout_seconds: 120
+
+  # 13. Limpiar Caché (Laravel/Symfony/Generic)
+  "clear-cache":
     run_as_user: "www-data"
-    timeout_seconds: 5
-    cooldown_seconds: 10
+    command: "cd /var/www/app && php artisan cache:clear"
+
+  # 14. Modo Mantenimiento Web
+  "web-maintenance-on":
+    run_as_user: "www-data"
+    command: "touch /var/www/app/maintenance.flag"
+
+  "web-maintenance-off":
+    run_as_user: "www-data"
+    command: "rm -f /var/www/app/maintenance.flag"
+
+  # ============================================================================
+  # CATEGORÍA E: MANTENIMIENTO DEL SISTEMA
+  # ============================================================================
+
+  # 15. Actualización Completa del OS
+  # ¡Cuidado! Tarda mucho. Usar timeout alto.
+  "sys-update":
+    command: "apt-get update && apt-get upgrade -y"
+    timeout_seconds: 1800   # 30 minutos
+    cooldown_seconds: 3600  # Máximo una vez por hora
+
+  # 16. Liberar Memoria (Drop Caches)
+  "drop-caches":
+    command: "sync; echo 3 > /proc/sys/vm/drop_caches"
+    cooldown_seconds: 300
+
+  # 17. Limpiar Temporales
+  "clean-tmp":
+    command: "find /tmp -type f -atime +1 -delete"
+
+  # ============================================================================
+  # CATEGORÍA F: EMERGENCIA Y VARIOS
+  # ============================================================================
+
+  # 18. MODO PÁNICO (Lockdown Total)
+  # Cierra todo el tráfico entrante excepto conexiones ya establecidas.
+  "lockdown":
+    command: "iptables -P INPUT DROP && iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+
+  # 19. Wake On LAN (Proxy)
+  # Enciende una máquina en la red local.
+  # IMPORTANTE: Usar guiones '-' en la MAC, ya que ':' no está permitido en params.
+  # Uso: ghostknock ... -args "mac=aa-bb-cc-dd-ee-ff"
+  "wol":
+    command: "wakeonlan {{.Params.mac}}"
+
+  # 20. Test de Conectividad (Ping a un destino y guardar resultado)
+  # Uso: ghostknock ... -args "host=8.8.8.8"
+  "ping-test":
+    command: "ping -c 4 {{.Params.host}} > /tmp/ping_result.txt"
+
+  # 21. Registrar IP Pública Actual (DynDNS casero)
+  # Guarda la IP desde la que haces knock en un archivo.
+  "update-my-ip":
+    command: "echo {{.SourceIP}} > /var/www/html/my_current_ip.txt"
