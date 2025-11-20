@@ -15,12 +15,16 @@ import (
 	"github.com/your-org/ghostknock/internal/protocol"
 )
 
+// version se establece en tiempo de compilación usando ldflags.
+var version = "dev"
+
 const (
 	defaultKeyFile = "id_ed25519"
 )
 
 func main() {
 	// 1. Configurar y parsear los argumentos de la línea de comandos.
+	showVersion := flag.Bool("version", false, "Muestra la versión de la aplicación y sale.")
 	host := flag.String("host", "", "Host o dirección IP del servidor GhostKnock (requerido)")
 	port := flag.Int("port", 3001, "Puerto UDP en el que el servidor escucha")
 	action := flag.String("action", "", "ActionID a solicitar (requerido)")
@@ -28,6 +32,11 @@ func main() {
 	// Nuevo flag para argumentos
 	args := flag.String("args", "", "Argumentos opcionales para la acción, formato: clave=valor,clave2=valor2")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("ghostknock version %s\n", version)
+		os.Exit(0)
+	}
 
 	if *host == "" || *action == "" {
 		fmt.Println("Error: los argumentos -host y -action son requeridos.")
@@ -80,7 +89,7 @@ func main() {
 			}
 			key := strings.TrimSpace(kv[0])
 			value := strings.TrimSpace(kv[1])
-			
+
 			// Añadimos al mapa de parámetros
 			payload.Params[key] = value
 		}

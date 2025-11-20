@@ -23,15 +23,15 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// version se establece en tiempo de compilación usando ldflags.
+var version = "dev"
+
 const (
-	replayWindowSeconds      = 5
-	actionCooldownSeconds    = 15
-	cacheCleanupInterval     = 1 * time.Minute
-	rateLimitEventsPerSecond = 1.0
-	rateLimitBurst           = 3
-	limiterCleanupInterval   = 3 * time.Minute
-	limiterEvictionAge       = 5 * time.Minute
-	logFilePath              = "/var/log/ghostknockd.log"
+	// Constantes que no se exponen en config.yaml por ser de ajuste interno
+	cacheCleanupInterval   = 1 * time.Minute
+	limiterCleanupInterval = 3 * time.Minute
+	limiterEvictionAge     = 5 * time.Minute
+	logFilePath            = "/var/log/ghostknockd.log"
 )
 
 type ipLimiter struct {
@@ -48,8 +48,14 @@ type Server struct {
 }
 
 func main() {
+	showVersion := flag.Bool("version", false, "Muestra la versión de la aplicación y sale.")
 	configFile := flag.String("config", "config.yaml", "Ruta al archivo de configuración YAML")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("ghostknockd version %s\n", version)
+		os.Exit(0)
+	}
 
 	tempLogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	cfg, err := config.LoadConfig(*configFile)
@@ -154,7 +160,8 @@ func (s *Server) getLimiter(ip net.IP) *rate.Limiter {
 	ipStr := ip.String()
 	limiter, exists := s.ipLimiters[ipStr]
 	if !exists {
-		newLimiter := rate.NewLimiter(rateLimitEventsPerSecond, rateLimitBurst)
+		// Usamos los valores de la configuración en lugar de constantes harcodeadas
+		newLimiter := rate.NewLimiter(rate.Limit(s.config.Security.RateLimitPerSecond), s.config.Security.RateLimitBurst)
 		s.ipLimiters[ipStr] = &ipLimiter{limiter: newLimiter, lastSeen: time.Now()}
 		return newLimiter
 	}
@@ -187,7 +194,8 @@ func (s *Server) startCacheCleaner() {
 	for range ticker.C {
 		s.cacheMutex.Lock()
 		purgedCount := 0
-		expirationDuration := time.Duration(actionCooldownSeconds*2) * time.Second
+		// Usamos el valor de la configuración
+		expirationDuration := time.Duration(s.config.Security.DefaultActionCooldownSeconds*2) * time.Second
 		for key, lastSeen := range s.actionCooldowns {
 			if time.Since(lastSeen) > expirationDuration {
 				delete(s.actionCooldowns, key)
@@ -243,7 +251,9 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	// 5. VALIDACIONES DE NEGOCIO
 	timestamp := time.Unix(0, payload.Timestamp)
 	age := time.Since(timestamp)
-	if age < 0 || age > (replayWindowSeconds*time.Second) {
+	// Usamos el valor de la configuración
+	replayWindow := time.Duration(s.config.Security.ReplayWindowSeconds) * time.Second
+	if age < 0 || age > replayWindow {
 		slog.Warn("Paquete descartado", "reason", "outside_replay_window", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "age_seconds", age.Seconds())
 		return
 	}
@@ -279,8 +289,9 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
-	effectiveCooldown := time.Duration(actionCooldownSeconds) * time.Second
-	if actionDef.CooldownSeconds >= 0 {
+	// Usamos el valor de la configuración como valor por defecto
+	effectiveCooldown := time.Duration(s.config.Security.DefaultActionCooldownSeconds) * time.Second
+	if actionDef.CooldownSeconds >= 0 { // -1 significa usar el global, 0 significa sin cooldown
 		effectiveCooldown = time.Duration(actionDef.CooldownSeconds) * time.Second
 	}
 
@@ -318,7 +329,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	)
 
 	// 7. EJECUCIÓN CON PARÁMETROS
-	// Aquí es donde se pasan los params deserializados al ejecutor seguro.
 	if err := executor.Execute(actionDef, packetInfo.SourceIP, payload.Params); err != nil {
 		slog.Error("Falló la ejecución de la acción", "action_id", payload.ActionID, "user", authorizedUser.Name, "error", err)
 	}
