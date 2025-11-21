@@ -50,10 +50,22 @@ type Server struct {
 func main() {
 	showVersion := flag.Bool("version", false, "Muestra la versión de la aplicación y sale.")
 	configFile := flag.String("config", "config.yaml", "Ruta al archivo de configuración YAML")
+	testConfig := flag.Bool("t", false, "Prueba la sintaxis del archivo de configuración y sale.")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("ghostknockd version %s\n", version)
+		os.Exit(0)
+	}
+
+	if *testConfig {
+		fmt.Printf("Probando la configuración desde: %s\n", *configFile)
+		_, err := config.LoadConfig(*configFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: La configuración es INVÁLIDA.\nDetalles: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("La sintaxis del archivo de configuración es correcta.")
 		os.Exit(0)
 	}
 
@@ -64,6 +76,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// <<-- LÍNEA CORREGIDA -->>
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.Fatalf("FATAL: No se pudo abrir el archivo de log en %s: %v. ¿Ejecutaste con sudo?", logFilePath, err)
