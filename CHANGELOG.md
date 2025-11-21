@@ -5,6 +5,7 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 ## [Unreleased]
 
 ### Added
+- **Validación de Configuración Avanzada:** El demonio `ghostknockd` ahora soporta el flag `-t` para realizar una validación exhaustiva del archivo de configuración sin necesidad de iniciar el servicio. Este sistema es capaz de detectar tanto errores de sintaxis (ej. tipos de datos incorrectos) como errores de lógica (ej. claves públicas en formato no válido) y reporta el problema exacto junto con el **número de línea** donde ocurrió, facilitando enormemente la depuración y previniendo caídas por configuraciones incorrectas.
 - **Transparencia de Versión:** Todos los ejecutables (`ghostknock`, `ghostknockd`, `ghostknock-keygen`) ahora soportan el flag `-version` para mostrar la versión de compilación actual.
 
 ### Changed
