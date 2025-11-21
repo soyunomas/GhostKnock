@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
@@ -28,10 +29,12 @@ var version = "dev"
 
 const (
 	// Constantes que no se exponen en config.yaml por ser de ajuste interno
-	cacheCleanupInterval   = 1 * time.Minute
-	limiterCleanupInterval = 3 * time.Minute
-	limiterEvictionAge     = 5 * time.Minute
-	logFilePath            = "/var/log/ghostknockd.log"
+	cacheCleanupInterval     = 1 * time.Minute
+	replayCacheCleanupInterval = 30 * time.Second
+	replayCacheEntryLifetime   = 60 * time.Second // <<-- NUEVA CONSTANTE: Vida fija para entradas de replay
+	limiterCleanupInterval   = 3 * time.Minute
+	limiterEvictionAge       = 5 * time.Minute
+	logFilePath              = "/var/log/ghostknockd.log"
 )
 
 type ipLimiter struct {
@@ -42,7 +45,9 @@ type ipLimiter struct {
 type Server struct {
 	config          *config.Config
 	actionCooldowns map[string]time.Time
+	replayCache     map[string]time.Time
 	cacheMutex      sync.RWMutex
+	replayMutex     sync.Mutex
 	ipLimiters      map[string]*ipLimiter
 	limitersMutex   sync.Mutex
 }
@@ -76,7 +81,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// <<-- LÍNEA CORREGIDA -->>
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.Fatalf("FATAL: No se pudo abrir el archivo de log en %s: %v. ¿Ejecutaste con sudo?", logFilePath, err)
@@ -131,6 +135,7 @@ func main() {
 	server := &Server{
 		config:          cfg,
 		actionCooldowns: make(map[string]time.Time),
+		replayCache:     make(map[string]time.Time),
 		ipLimiters:      make(map[string]*ipLimiter),
 	}
 
@@ -141,6 +146,7 @@ func main() {
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go server.startCacheCleaner()
+	go server.startReplayCacheCleaner()
 	go server.startLimiterCleaner()
 
 	packetsCh := make(chan listener.PacketInfo)
@@ -173,7 +179,6 @@ func (s *Server) getLimiter(ip net.IP) *rate.Limiter {
 	ipStr := ip.String()
 	limiter, exists := s.ipLimiters[ipStr]
 	if !exists {
-		// Usamos los valores de la configuración en lugar de constantes harcodeadas
 		newLimiter := rate.NewLimiter(rate.Limit(s.config.Security.RateLimitPerSecond), s.config.Security.RateLimitBurst)
 		s.ipLimiters[ipStr] = &ipLimiter{limiter: newLimiter, lastSeen: time.Now()}
 		return newLimiter
@@ -201,13 +206,34 @@ func (s *Server) startLimiterCleaner() {
 	}
 }
 
+func (s *Server) startReplayCacheCleaner() {
+	ticker := time.NewTicker(replayCacheCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.replayMutex.Lock()
+		purgedCount := 0
+		// <<-- LÓGICA CORREGIDA -->>
+		// Usamos un tiempo de vida fijo y generoso para las entradas de la caché,
+		// independientemente de la ventana de replay del paquete.
+		for sig, timestamp := range s.replayCache {
+			if time.Since(timestamp) > replayCacheEntryLifetime {
+				delete(s.replayCache, sig)
+				purgedCount++
+			}
+		}
+		s.replayMutex.Unlock()
+		if purgedCount > 0 {
+			slog.Debug("Limpiadas firmas de la caché anti-replay", "count", purgedCount)
+		}
+	}
+}
+
 func (s *Server) startCacheCleaner() {
 	ticker := time.NewTicker(cacheCleanupInterval)
 	defer ticker.Stop()
 	for range ticker.C {
 		s.cacheMutex.Lock()
 		purgedCount := 0
-		// Usamos el valor de la configuración
 		expirationDuration := time.Duration(s.config.Security.DefaultActionCooldownSeconds*2) * time.Second
 		for key, lastSeen := range s.actionCooldowns {
 			if time.Since(lastSeen) > expirationDuration {
@@ -223,14 +249,12 @@ func (s *Server) startCacheCleaner() {
 }
 
 func (s *Server) processKnock(packetInfo listener.PacketInfo) {
-	// 1. RATE LIMITING
 	limiter := s.getLimiter(packetInfo.SourceIP)
 	if !limiter.Allow() {
 		slog.Warn("Paquete descartado", "reason", "rate_limit_exceeded", "source_ip", packetInfo.SourceIP.String())
 		return
 	}
 
-	// 2. VALIDACIÓN DE ESTRUCTURA BÁSICA
 	rawPayload := packetInfo.Payload
 	if len(rawPayload) <= ed25519.SignatureSize {
 		return
@@ -239,7 +263,15 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	signature := rawPayload[:ed25519.SignatureSize]
 	serializedPayload := rawPayload[ed25519.SignatureSize:]
 
-	// 3. VERIFICACIÓN CRIPTOGRÁFICA TEMPRANA
+	signatureB64 := base64.StdEncoding.EncodeToString(signature)
+	s.replayMutex.Lock()
+	if _, found := s.replayCache[signatureB64]; found {
+		s.replayMutex.Unlock()
+		slog.Warn("Paquete descartado", "reason", "replay_attack_detected", "source_ip", packetInfo.SourceIP.String())
+		return
+	}
+	s.replayMutex.Unlock()
+
 	var authorizedUser *config.User
 	for i := range s.config.Users {
 		user := &s.config.Users[i]
@@ -254,17 +286,14 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
-	// 4. DESERIALIZACIÓN SEGURA (Solo si la firma es válida)
 	payload, err := protocol.DeserializePayload(serializedPayload)
 	if err != nil {
 		slog.Warn("Paquete descartado", "reason", "payload_deserialization_failed", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "error", err)
 		return
 	}
 
-	// 5. VALIDACIONES DE NEGOCIO
 	timestamp := time.Unix(0, payload.Timestamp)
 	age := time.Since(timestamp)
-	// Usamos el valor de la configuración
 	replayWindow := time.Duration(s.config.Security.ReplayWindowSeconds) * time.Second
 	if age < 0 || age > replayWindow {
 		slog.Warn("Paquete descartado", "reason", "outside_replay_window", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "age_seconds", age.Seconds())
@@ -295,16 +324,14 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		}
 	}
 
-	// 6. LÓGICA DE COOLDOWN
 	actionDef, ok := s.config.Actions[payload.ActionID]
 	if !ok {
 		slog.Error("Inconsistencia de configuración: la acción autorizada no existe", "action_id", payload.ActionID)
 		return
 	}
 
-	// Usamos el valor de la configuración como valor por defecto
 	effectiveCooldown := time.Duration(s.config.Security.DefaultActionCooldownSeconds) * time.Second
-	if actionDef.CooldownSeconds >= 0 { // -1 significa usar el global, 0 significa sin cooldown
+	if actionDef.CooldownSeconds >= 0 {
 		effectiveCooldown = time.Duration(actionDef.CooldownSeconds) * time.Second
 	}
 
@@ -331,6 +358,10 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		}
 	}
 
+	s.replayMutex.Lock()
+	s.replayCache[signatureB64] = time.Now()
+	s.replayMutex.Unlock()
+
 	s.cacheMutex.Lock()
 	s.actionCooldowns[cooldownKey] = time.Now()
 	s.cacheMutex.Unlock()
@@ -341,7 +372,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		"action_id", payload.ActionID,
 	)
 
-	// 7. EJECUCIÓN CON PARÁMETROS
 	if err := executor.Execute(actionDef, packetInfo.SourceIP, payload.Params); err != nil {
 		slog.Error("Falló la ejecución de la acción", "action_id", payload.ActionID, "user", authorizedUser.Name, "error", err)
 	}

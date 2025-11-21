@@ -20,10 +20,9 @@ import (
 )
 
 // safeParamRegex define la lista blanca de caracteres permitidos en los parámetros.
-// Solo permite letras, números, puntos, guiones bajos y guiones medios.
-// Esto previene inyecciones de comandos (espacios, puntos y coma, pipes, etc.)
-// y navegación de directorios (barras).
-var safeParamRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+// Empieza con un carácter alfanumérico, punto o guion bajo, y luego permite guiones medios.
+// Esto previene inyecciones de comandos y que el valor sea interpretado como un flag.
+var safeParamRegex = regexp.MustCompile(`^[a-zA-Z0-9._][a-zA-Z0-9._-]*$`)
 
 // Execute procesa una acción, valida sus parámetros, la ejecuta y programa su reversión.
 // Ahora acepta un mapa de parámetros sanitizados.
@@ -70,7 +69,7 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	if len(params) > 0 {
 		for key, value := range params {
 			if !safeParamRegex.MatchString(value) {
-				return fmt.Errorf("SEGURIDAD: El valor del parámetro '%s' contiene caracteres inválidos. Solo se permiten [a-zA-Z0-9._-]", key)
+				return fmt.Errorf("SEGURIDAD: El valor del parámetro '%s' contiene caracteres inválidos o empieza con un guion. Solo se permiten [a-zA-Z0-9._-] y no puede empezar con '-'", key)
 			}
 			// Validación redundante pero explícita contra path traversal relativo.
 			if value == ".." {

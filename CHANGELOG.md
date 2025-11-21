@@ -11,6 +11,10 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 ### Changed
 - **Configuración de Seguridad Flexible:** Se ha movido la configuración de parámetros de seguridad clave (como la ventana anti-replay y el cooldown por defecto) del código fuente a una nueva sección opcional `security:` en `config.yaml`. Esto permite a los administradores ajustar el balance entre seguridad y tolerancia (ej. desfases horarios) sin necesidad de recompilar.
 
+### Security
+- **Mitigación de Ataques de Replay:** El demonio ahora mantiene una caché de firmas de paquetes válidos durante la ventana anti-replay. Cualquier paquete con una firma duplicada dentro de esta ventana es descartado, previniendo que un atacante pueda re-ejecutar un comando capturado múltiples veces.
+- **Endurecimiento contra Inyección de Argumentos:** Se ha modificado la validación de parámetros (`-args`) para prohibir que los valores comiencen con un guion (`-`). Esto previene que un parámetro pueda ser interpretado como un flag por el comando subyacente (ej. `ls -R`), cerrando un vector de ataque de inyección de argumentos.
+
 ## [1.1.0]
 
 ### Added

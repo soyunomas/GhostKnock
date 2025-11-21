@@ -38,7 +38,32 @@ daemon:
   pid_file: "/var/run/ghostknockd.pid"
 
 # ------------------------------------------------------------------------------
-# 3. USUARIOS AUTORIZADOS
+# 3. PARÁMETROS DE SEGURIDAD (OPCIONAL)
+# ------------------------------------------------------------------------------
+# Esta sección es opcional. Descomente y ajuste los valores si necesita anular
+# los valores por defecto, que ya son seguros.
+#
+# security:
+#   # Ventana de tiempo (en segundos) para aceptar un knock. Un paquete más antiguo
+#   # que esto será rechazado para prevenir ataques de repetición (replay).
+#   # Aumentar solo si hay un desfase horario significativo entre cliente y servidor.
+#   # Por defecto: 5
+#   replay_window_seconds: 5
+#
+#   # Cooldown global (en segundos) que se aplica a cualquier acción que no defina
+#   # su propio 'cooldown_seconds'. Previene la ejecución repetida accidental.
+#   # Por defecto: 15
+#   default_action_cooldown_seconds: 15
+#
+#   # (Avanzado) Protección Anti-DoS. Limita cuántos paquetes por segundo se
+#   # procesan desde una misma IP. 'rate_limit_per_second' es el ritmo sostenido,
+#   # y 'rate_limit_burst' es la ráfaga máxima permitida.
+#   # Por defecto: 1.0 (un paquete por segundo) y 3 (ráfaga de 3).
+#   rate_limit_per_second: 1.0
+#   rate_limit_burst: 3
+
+# ------------------------------------------------------------------------------
+# 4. USUARIOS AUTORIZADOS
 # ------------------------------------------------------------------------------
 users:
   # --- ADMIN (Acceso Total) ---
@@ -70,7 +95,7 @@ users:
       - "clear-cache"
 
 # ------------------------------------------------------------------------------
-# 4. CATÁLOGO DE ACCIONES (20+ EJEMPLOS)
+# 5. CATÁLOGO DE ACCIONES (20+ EJEMPLOS)
 # ------------------------------------------------------------------------------
 # Variables Disponibles:
 #   {{.SourceIP}}   -> La IP desde donde se envió el knock.
@@ -78,7 +103,10 @@ users:
 #
 # REGLAS DE SEGURIDAD PARA PARÁMETROS:
 #   - Solo permitidos: a-z, A-Z, 0-9, . (punto), _ (guion bajo), - (guion).
+#   - ¡NUEVO! NO pueden empezar con guion ('-') para prevenir inyección de argumentos.
 #   - NO permitidos: Espacios, /, \, ;, :, |, &.
+#   - RECOMENDACIÓN: Si el comando lo soporta, use '--' para separar flags de argumentos.
+#     Ejemplo: command: "rm -- {{.Params.filename}}"
 # ------------------------------------------------------------------------------
 
 actions:
@@ -93,6 +121,8 @@ actions:
     command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
     revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
     revert_delay_seconds: 300
+    # Cooldown para esta acción específica. '-1' usaría el global de la sección 'security'.
+    cooldown_seconds: 60
 
   # 2. Acceso VPN (Wireguard/OpenVPN)
   # Similar al SSH, pero para el puerto UDP de la VPN (ej. 51820).
@@ -140,6 +170,7 @@ actions:
   # Uso: ghostknock ... -action status-svc -args "name=ssh"
   "status-svc":
     command: "systemctl status {{.Params.name}} > /tmp/gk_status_{{.Params.name}}.log"
+    cooldown_seconds: 0 # Sin cooldown para debug
 
   # ============================================================================
   # CATEGORÍA C: GESTIÓN DE DOCKER
