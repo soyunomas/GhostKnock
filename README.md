@@ -1,20 +1,22 @@
 # 👻 GhostKnock
 
 [![Licencia: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/badge/release-v1.1.0-blue.svg)](https://github.com/soyunomas/GhostKnock/releases)
+[![Release](https://img.shields.io/badge/release-v2.0.0-blue.svg)](https://github.com/soyunomas/GhostKnock/releases)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-lightgrey.svg)]()
 
-**GhostKnock** es un sistema de **ejecución remota segura e invisible**.
+**GhostKnock** es un sistema de **ejecución remota segura, invisible y confidencial**.
 
-Permite disparar comandos predefinidos en un servidor enviando un único paquete UDP. A diferencia del "port knocking" tradicional, GhostKnock no depende de secuencias secretas de puertos, sino de **criptografía de clave pública (Ed25519)**.
+Permite disparar comandos predefinidos en un servidor enviando un único paquete UDP. A diferencia del "port knocking" tradicional, GhostKnock no depende de secuencias secretas de puertos, sino de **criptografía de clave pública (Ed25519 para autenticación y X25519 para cifrado)**.
 
-El servidor escucha pasivamente el tráfico de red. Si recibe un paquete con una firma válida, ejecuta la acción asociada. Si la firma es inválida, el paquete es ignorado silenciosamente, haciendo que el servidor sea **indetectable** a escaneos de puertos.
+El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma válida y un payload cifrado para él, lo descifra y ejecuta la acción asociada. Si no, el paquete es ignorado silenciosamente, haciendo que el servidor sea **indetectable** y su comunicación **indescifrable**.
 
 ---
 
 ## ✨ Características
 
-*   🔐 **Criptografía Fuerte:** Autenticación mediante firmas `Ed25519`. Sin contraseñas ni secretos compartidos.
+*   🔐 **Criptografía Fuerte de Doble Capa:**
+    *   **Autenticación:** Firmas `Ed25519` para verificar la identidad del remitente.
+    *   **Confidencialidad:** Cifrado de extremo a extremo con `X25519` (`nacl/box`) para ocultar la acción y los parámetros, previniendo fugas de información.
 *   🧩 **Parámetros Dinámicos:** El cliente puede enviar argumentos (ej. IPs, nombres de servicio) que se inyectan de forma segura en los comandos del servidor.
 *   🛡️ **Seguridad Ofensiva/Defensiva:**
     *   **Invisible:** No abre puertos TCP.
@@ -59,28 +61,39 @@ make build-windows  # Compila .exe para Windows
 
 ---
 
-## 🚀 Guía de Inicio Rápido
+## 🚀 Guía de Inicio Rápido (Protocolo v2 con Cifrado)
 
-### 1. Generar tus Llaves (En tu PC Cliente)
-Necesitas un par de claves. La **privada** se queda en tu PC, la **pública** va al servidor.
+### 1. Generar la Identidad del Servidor (En el Servidor)
+El servidor ahora necesita su propio par de claves para el cifrado. Genéralo una sola vez.
 
 ```bash
-# Linux / Mac
-ghostknock-keygen
-# Salida: Clave pública guardada en ~/.config/ghostknock/id_ed25519.pub
-
-# Windows (PowerShell)
-.\ghostknock-keygen.exe
+# Como root en el servidor
+sudo ghostknock-keygen -o /etc/ghostknock/server_key
+# Salida: Claves generadas en /etc/ghostknock/server_key y /etc/ghostknock/server_key.pub
+# ¡Asegura los permisos!
+sudo chmod 600 /etc/ghostknock/server_key*
 ```
-> **Copia la cadena Base64 que aparece en la terminal.** Esa es tu clave pública.
+> **Comparte de forma segura el archivo `/etc/ghostknock/server_key.pub` con todos los clientes.**
 
-### 2. Configurar el Servidor
-Edita el archivo `/etc/ghostknock/config.yaml`:
+### 2. Generar tu Identidad de Cliente (En tu PC)
+Esto no ha cambiado. Necesitas un par de claves: la privada se queda contigo, la pública va al servidor.
+
+```bash
+# En tu máquina local (Linux, Mac, Windows)
+ghostknock-keygen
+```
+> **Copia la cadena Base64 de clave pública que aparece en la terminal.**
+
+### 3. Configurar el Servidor
+Edita el archivo `/etc/ghostknock/config.yaml` y añade dos cosas: la ruta a la clave privada del servidor y los datos de tu usuario cliente.
 
 ```yaml
+# Indicar al servidor dónde está su propia identidad secreta
+server_private_key_path: "/etc/ghostknock/server_key"
+
 users:
   - name: "admin_remoto"
-    public_key: "PEGA_TU_CLAVE_PUBLICA_AQUI_..."
+    public_key: "PEGA_TU_CLAVE_PUBLICA_DE_CLIENTE_AQUI..."
     actions:
       - "write-test"
       - "open-ssh"
@@ -91,18 +104,29 @@ actions:
     cooldown_seconds: 0
 ```
 
-### 3. Iniciar el Servicio
+### 4. Preparar el Cliente
+En tu PC, guarda el archivo `server_key.pub` que te dio el administrador. Por ejemplo, en `~/.config/ghostknock/server.pub`.
+
+### 5. Iniciar el Servicio en el Servidor
 ```bash
 sudo systemctl restart ghostknockd
 ```
 
-### 4. Enviar tu primer Knock
+### 6. Enviar tu primer Knock Cifrado
+Ahora debes especificar la clave pública del servidor para que el cliente sepa cómo cifrar el mensaje.
+
 ```bash
 # Linux
-ghostknock -host IP_DEL_SERVIDOR -action write-test -args "p1=Hola,p2=Mundo"
+ghostknock -host IP_DEL_SERVIDOR \
+           -server-pubkey ~/.config/ghostknock/server.pub \
+           -action write-test \
+           -args "p1=Hola,p2=Mundo"
 
 # Windows
-.\ghostknock.exe -host IP_DEL_SERVIDOR -action write-test -args "p1=Hola,p2=Mundo"
+.\ghostknock.exe -host IP_DEL_SERVIDOR `
+                 -server-pubkey C:\Users\TuUser\.config\ghostknock\server.pub `
+                 -action write-test `
+                 -args "p1=Hola,p2=Mundo"
 ```
 
 ---
@@ -126,7 +150,7 @@ Crea un archivo para verificar que el sistema procesa parámetros correctamente.
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host 127.0.0.1 -action write-test -args "p1=ValorUno,p2=Valor_Dos"
+    ghostknock -host 127.0.0.1 -action write-test -args "p1=ValorUno,p2=Valor_Dos" -server-pubkey RUTA_A_SERVER.PUB
     ```
 *   **Resultado:** `cat /tmp/prueba.txt` mostrará el contenido.
 
@@ -142,7 +166,7 @@ Abre el puerto 22 solo para tu IP actual y lo cierra automáticamente tras 5 min
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action open-ssh
+    ghostknock -host MISERVIDOR -action open-ssh -server-pubkey RUTA_A_SERVER.PUB
     ```
 
 ### 3. Reiniciar Servicios Específicos
@@ -156,7 +180,7 @@ Reinicia un servicio pasando su nombre como parámetro. Útil para servidores we
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action restart-svc -args "name=nginx"
+    ghostknock -host MISERVIDOR -action restart-svc -args "name=nginx" -server-pubkey RUTA_A_SERVER.PUB
     ```
 
 ### 4. Banear IP Atacante (Firewall)
@@ -169,7 +193,7 @@ Si detectas un ataque desde una IP, bloquéala remotamente sin necesidad de entr
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action ban-ip -args "target=192.168.50.5"
+    ghostknock -host MISERVIDOR -action ban-ip -args "target=192.168.50.5" -server-pubkey RUTA_A_SERVER.PUB
     ```
 
 ### 5. Despliegue Rápido (Git Pull)
@@ -184,7 +208,7 @@ Actualiza el código de una aplicación web para una rama concreta.
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action deploy-app -args "branch=main"
+    ghostknock -host MISERVIDOR -action deploy-app -args "branch=main" -server-pubkey RUTA_A_SERVER.PUB
     ```
 
 ### 6. Gestión de Contenedores Docker
@@ -197,7 +221,7 @@ Reinicia un contenedor Docker específico.
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action docker-bounce -args "container=api-gateway"
+    ghostknock -host MISERVIDOR -action docker-bounce -args "container=api-gateway" -server-pubkey RUTA_A_SERVER.PUB
     ```
 
 ### 7. Modo "Pánico" (Lockdown)
@@ -210,7 +234,7 @@ Cierra todo el tráfico entrante nuevo en caso de emergencia de seguridad.
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action lockdown
+    ghostknock -host MISERVIDOR -action lockdown -server-pubkey RUTA_A_SERVER.PUB
     ```
 
 ### 8. Mantenimiento y Limpieza
@@ -223,7 +247,7 @@ Ejecuta scripts de mantenimiento preexistentes en el servidor.
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action cleanup -args "mode=full"
+    ghostknock -host MISERVIDOR -action cleanup -args "mode=full" -server-pubkey RUTA_A_SERVER.PUB
     ```
 
 ### 9. Wake-on-LAN Proxy
@@ -237,7 +261,7 @@ Enciende una máquina de la red interna.
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action wol-pc -args "mac=aa-bb-cc-dd-ee-ff"
+    ghostknock -host MISERVIDOR -action wol-pc -args "mac=aa-bb-cc-dd-ee-ff" -server-pubkey RUTA_A_SERVER.PUB
     ```
 
 ### 10. Actualización del Sistema
@@ -252,7 +276,7 @@ Lanza una actualización de paquetes del sistema operativo.
     ```
 *   **Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action sys-update
+    ghostknock -host MISERVIDOR -action sys-update -server-pubkey RUTA_A_SERVER.PUB
     ```
 
 ---
@@ -263,6 +287,7 @@ Aquí se detallan todas las opciones disponibles para configurar el demonio.
 
 | Sección | Campo | Tipo | Obligatorio | Descripción |
 | :--- | :--- | :--- | :---: | :--- |
+| *(Raíz)* | `server_private_key_path` | string | ✅ | Ruta al archivo de clave privada `ed25519` del servidor, usado para descifrar los payloads. |
 | **`listener`** | `interface` | string | ✅ | Interfaz de red para escuchar (ej: `eth0`, `any`). |
 | | `port` | int | ✅ | Puerto UDP a escuchar (ej: `3001`). |
 | | `listen_ip` | string | ❌ | (Opcional) Si se define, escucha solo en esta IP específica. Por defecto: `""` (Todas). |

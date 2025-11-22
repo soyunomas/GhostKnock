@@ -9,7 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings" // <<-- NUEVA IMPORTACIÓN
+	"strings"
 
 	// Esta ruta DEBE COINCIDIR con la línea 'module' en tu archivo go.mod
 	"github.com/your-org/ghostknock/internal/protocol"
@@ -29,7 +29,7 @@ func main() {
 	port := flag.Int("port", 3001, "Puerto UDP en el que el servidor escucha")
 	action := flag.String("action", "", "ActionID a solicitar (requerido)")
 	keyFile := flag.String("key", "", "Ruta a la clave privada ed25519 (por defecto: ~/.config/ghostknock/id_ed25519)")
-	// Nuevo flag para argumentos
+	serverPubkeyFile := flag.String("server-pubkey", "", "Ruta a la clave pública ed25519 del servidor (requerido)") // <<-- NUEVO FLAG
 	args := flag.String("args", "", "Argumentos opcionales para la acción, formato: clave=valor,clave2=valor2")
 	flag.Parse()
 
@@ -38,8 +38,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *host == "" || *action == "" {
-		fmt.Println("Error: los argumentos -host y -action son requeridos.")
+	if *host == "" || *action == "" || *serverPubkeyFile == "" { // <<-- VALIDACIÓN ACTUALIZADA
+		fmt.Println("Error: los argumentos -host, -action y -server-pubkey son requeridos.")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -47,7 +47,7 @@ func main() {
 	log.SetFlags(0)
 	log.Printf("Preparando knock para la acción '%s' en %s:%d...", *action, *host, *port)
 
-	// 2. DETERMINAR LA RUTA DE LA CLAVE PRIVADA
+	// 2. DETERMINAR LA RUTA DE LA CLAVE PRIVADA DEL CLIENTE
 	var finalKeyPath string
 	if *keyFile != "" {
 		finalKeyPath = *keyFile
@@ -61,54 +61,53 @@ func main() {
 		log.Printf("Usando clave privada por defecto: %s", finalKeyPath)
 	}
 
-	// 3. Cargar la clave privada del fichero.
+	// 3. Cargar la clave privada del cliente del fichero.
 	privateKeyBytes, err := os.ReadFile(finalKeyPath)
 	if err != nil {
 		log.Fatalf("FATAL: No se pudo leer la clave privada '%s'. ¿Ejecutaste ghostknock-keygen? Error: %v", finalKeyPath, err)
 	}
-
 	if len(privateKeyBytes) != ed25519.PrivateKeySize {
 		log.Fatalf("FATAL: El archivo de clave privada '%s' tiene un tamaño incorrecto. Se esperaba %d bytes, pero tiene %d.", finalKeyPath, ed25519.PrivateKeySize, len(privateKeyBytes))
 	}
 	privateKey := ed25519.PrivateKey(privateKeyBytes)
 
-	// 4. Crear y rellenar el payload.
+	// 4. Cargar la clave pública del servidor del fichero.
+	serverPubKeyBytes, err := os.ReadFile(*serverPubkeyFile)
+	if err != nil {
+		log.Fatalf("FATAL: No se pudo leer la clave pública del servidor '%s': %v", *serverPubkeyFile, err)
+	}
+	if len(serverPubKeyBytes) != ed25519.PublicKeySize {
+		log.Fatalf("FATAL: El archivo de clave pública del servidor '%s' tiene un tamaño incorrecto. Se esperaba %d bytes, pero tiene %d.", *serverPubkeyFile, ed25519.PublicKeySize, len(serverPubKeyBytes))
+	}
+	serverPubKey := ed25519.PublicKey(serverPubKeyBytes)
+
+	// 5. Crear y rellenar el payload.
 	payload := protocol.NewPayload(*action)
 
-	// --- LÓGICA DE PARSING DE ARGUMENTOS ---
 	if *args != "" {
 		pairs := strings.Split(*args, ",")
 		for _, pair := range pairs {
 			if pair == "" {
 				continue
 			}
-			// SplitN asegura que solo rompemos en el primer '='
 			kv := strings.SplitN(pair, "=", 2)
 			if len(kv) != 2 {
 				log.Fatalf("Error de formato en argumentos: '%s'. Debe ser clave=valor.", pair)
 			}
 			key := strings.TrimSpace(kv[0])
 			value := strings.TrimSpace(kv[1])
-
-			// Añadimos al mapa de parámetros
 			payload.Params[key] = value
 		}
 		if len(payload.Params) > 0 {
 			log.Printf("Adjuntando %d parámetros al payload.", len(payload.Params))
 		}
 	}
-	// ---------------------------------------
 
-	serializedPayload, err := payload.Serialize()
+	// 6. Cifrar y firmar el payload para crear el mensaje final.
+	finalMessage, err := protocol.EncryptAndSign(payload, privateKey, serverPubKey)
 	if err != nil {
-		log.Fatalf("FATAL: No se pudo serializar el payload: %v", err)
+		log.Fatalf("FATAL: No se pudo cifrar y firmar el mensaje: %v", err)
 	}
-
-	// 5. Firmar el payload serializado.
-	signature := ed25519.Sign(privateKey, serializedPayload)
-
-	// 6. Construir el mensaje final: [firma][payload serializado]
-	finalMessage := append(signature, serializedPayload...)
 
 	// 7. Enviar el mensaje en un único paquete UDP.
 	serverAddr := fmt.Sprintf("%s:%d", *host, *port)

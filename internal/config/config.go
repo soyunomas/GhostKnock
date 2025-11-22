@@ -44,12 +44,13 @@ type Security struct {
 
 // Config es la estructura raíz de nuestro archivo de configuración.
 type Config struct {
-	Listener Listener          `yaml:"listener"`
-	Logging  Logging           `yaml:"logging"`
-	Daemon   Daemon            `yaml:"daemon"`
-	Security Security          `yaml:"security"`
-	Users    []User            `yaml:"users"`
-	Actions  map[string]Action `yaml:"actions"`
+	ServerPrivateKeyPath string            `yaml:"server_private_key_path"` // <<-- NUEVO CAMPO
+	Listener             Listener          `yaml:"listener"`
+	Logging              Logging           `yaml:"logging"`
+	Daemon               Daemon            `yaml:"daemon"`
+	Security             Security          `yaml:"security"`
+	Users                []User            `yaml:"users"`
+	Actions              map[string]Action `yaml:"actions"`
 }
 
 // Listener define en qué interfaz y puerto escucha el servidor.
@@ -176,6 +177,15 @@ func LoadConfig(path string) (*Config, error) {
 
 // validateConfig ahora se enfoca en validaciones GLOBALES que cruzan diferentes secciones.
 func validateConfig(cfg *Config) error {
+	// <<-- INICIO: NUEVAS VALIDACIONES -->>
+	if cfg.ServerPrivateKeyPath == "" {
+		return errors.New("el campo 'server_private_key_path' es obligatorio en la configuración")
+	}
+	if _, err := os.Stat(cfg.ServerPrivateKeyPath); os.IsNotExist(err) {
+		return fmt.Errorf("el archivo de clave privada del servidor '%s' no existe", cfg.ServerPrivateKeyPath)
+	}
+	// <<-- FIN: NUEVAS VALIDACIONES -->>
+
 	if cfg.Listener.Port <= 0 || cfg.Listener.Port > 65535 {
 		return fmt.Errorf("puerto de escucha inválido: %d", cfg.Listener.Port)
 	}
@@ -190,7 +200,7 @@ func validateConfig(cfg *Config) error {
 
 	// Las validaciones específicas de 'user' se han movido a UnmarshalYAML.
 	// Solo dejamos aquí las validaciones que dependen de otras secciones del config.
-	
+
 	for actionName, action := range cfg.Actions {
 		if action.RunAsUser != "" {
 			if _, err := user.Lookup(action.RunAsUser); err != nil {

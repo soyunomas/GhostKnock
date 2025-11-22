@@ -4,16 +4,23 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 
 ## [Unreleased]
 
+## [2.0.0]
+
+### Security
+- **Cifrado de Extremo a Extremo (Confidencialidad):** Se ha implementado un cifrado de clave pública (X25519, `nacl/box`) obligatorio para todo el payload. Ahora, la acción y los parámetros enviados son indescifrables para cualquier observador en la red, eliminando por completo las fugas de información y garantizando la confidencialidad. La autenticación se mantiene con la firma Ed25519 original.
+- **Mitigación de Ataques de Replay:** El demonio ahora mantiene una caché de firmas de paquetes válidos durante la ventana anti-replay. Cualquier paquete con una firma duplicada dentro de esta ventana es descartado, previniendo que un atacante pueda re-ejecutar un comando capturado múltiples veces.
+- **Endurecimiento contra Inyección de Argumentos:** Se ha modificado la validación de parámetros (`-args`) para prohibir que los valores comiencan con un guion (`-`). Esto previene que un parámetro pueda ser interpretado como un flag por el comando subyacente (ej. `ls -R`), cerrando un vector de ataque de inyección de argumentos.
+
 ### Added
-- **Validación de Configuración Avanzada:** El demonio `ghostknockd` ahora soporta el flag `-t` para realizar una validación exhaustiva del archivo de configuración sin necesidad de iniciar el servicio. Este sistema es capaz de detectar tanto errores de sintaxis (ej. tipos de datos incorrectos) como errores de lógica (ej. claves públicas en formato no válido) y reporta el problema exacto junto con el **número de línea** donde ocurrió, facilitando enormemente la depuración y previniendo caídas por configuraciones incorrectas.
+- **Identidad Propia del Servidor:** El demonio `ghostknockd` ahora requiere su propio par de claves Ed25519 para el descifrado. La clave privada se especifica en `config.yaml` a través de la nueva directiva `server_private_key_path`.
+- **Validación de Configuración Avanzada:** El demonio `ghostknockd` ahora soporta el flag `-t` para realizar una validación exhaustiva del archivo de configuración sin necesidad de iniciar el servicio. Este sistema es capaz de detectar tanto errores de sintaxis como de lógica (ej. claves en formato no válido) y reporta el problema exacto junto con el **número de línea** donde ocurrió.
 - **Transparencia de Versión:** Todos los ejecutables (`ghostknock`, `ghostknockd`, `ghostknock-keygen`) ahora soportan el flag `-version` para mostrar la versión de compilación actual.
 
 ### Changed
-- **Configuración de Seguridad Flexible:** Se ha movido la configuración de parámetros de seguridad clave (como la ventana anti-replay y el cooldown por defecto) del código fuente a una nueva sección opcional `security:` en `config.yaml`. Esto permite a los administradores ajustar el balance entre seguridad y tolerancia (ej. desfases horarios) sin necesidad de recompilar.
-
-### Security
-- **Mitigación de Ataques de Replay:** El demonio ahora mantiene una caché de firmas de paquetes válidos durante la ventana anti-replay. Cualquier paquete con una firma duplicada dentro de esta ventana es descartado, previniendo que un atacante pueda re-ejecutar un comando capturado múltiples veces.
-- **Endurecimiento contra Inyección de Argumentos:** Se ha modificado la validación de parámetros (`-args`) para prohibir que los valores comiencen con un guion (`-`). Esto previene que un parámetro pueda ser interpretado como un flag por el comando subyacente (ej. `ls -R`), cerrando un vector de ataque de inyección de argumentos.
+- **BREAKING CHANGE: Protocolo de Red v2:** El protocolo de comunicación ha sido actualizado para ser incompatible con versiones anteriores debido a la adición del cifrado obligatorio.
+- **BREAKING CHANGE: Nuevo Flag de Cliente Requerido:** El cliente `ghostknock` ahora requiere el flag `-server-pubkey` para especificar la clave pública del servidor, necesaria para cifrar la comunicación.
+- **BREAKING CHANGE: Configuración de Servidor Modificada:** El archivo `config.yaml` ahora requiere la directiva `server_private_key_path` en el nivel raíz.
+- **Configuración de Seguridad Flexible:** Se ha movido la configuración de parámetros de seguridad clave (como la ventana anti-replay y el cooldown por defecto) del código fuente a una nueva sección opcional `security:` en `config.yaml`.
 
 ## [1.1.0]
 
@@ -34,5 +41,6 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 
 - Lanzamiento inicial del proyecto GhostKnock.
 
-[Unreleased]: https://github.com/soyunomas/GhostKnock/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/soyunomas/GhostKnock/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/soyunomas/GhostKnock/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/soyunomas/GhostKnock/compare/v1.0.0...v1.1.0

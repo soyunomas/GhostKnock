@@ -10,7 +10,7 @@ import (
 	"net"
 	"os/exec"
 	"os/user"
-	"regexp" // <<-- NUEVA IMPORTACIÓN
+	"regexp"
 	"strconv"
 	"syscall"
 	"text/template"
@@ -20,12 +20,14 @@ import (
 )
 
 // safeParamRegex define la lista blanca de caracteres permitidos en los parámetros.
-// Empieza con un carácter alfanumérico, punto o guion bajo, y luego permite guiones medios.
-// Esto previene inyecciones de comandos y que el valor sea interpretado como un flag.
 var safeParamRegex = regexp.MustCompile(`^[a-zA-Z0-9._][a-zA-Z0-9._-]*$`)
 
+// <<-- INICIO: NUEVO REGEX PARA VALIDACIÓN DE PLANTILLA -->>
+// templateParamRegex encuentra todas las instancias de {{.Params.key}} en una plantilla.
+var templateParamRegex = regexp.MustCompile(`\{\{\.Params\.([a-zA-Z0-9_]+)\}\}`)
+// <<-- FIN: NUEVO REGEX -->>
+
 // Execute procesa una acción, valida sus parámetros, la ejecuta y programa su reversión.
-// Ahora acepta un mapa de parámetros sanitizados.
 func Execute(action config.Action, sourceIP net.IP, params map[string]string) error {
 	slog.Debug("Ejecutando acción", "source_ip", sourceIP.String())
 
@@ -53,7 +55,6 @@ func scheduleRevert(action config.Action, sourceIP net.IP, params map[string]str
 	time.Sleep(delay)
 
 	slog.Info("Ejecutando reversión", "source_ip", sourceIP.String())
-	// La reversión también recibe los parámetros (ej. para cerrar el puerto a una IP específica enviada como param).
 	if err := runCommand("revert", action.RevertCommand, action.TimeoutSeconds, action.RunAsUser, sourceIP, params); err != nil {
 		slog.Error(
 			"Falló la ejecución del comando de reversión",
@@ -66,19 +67,27 @@ func scheduleRevert(action config.Action, sourceIP net.IP, params map[string]str
 // runCommand es el núcleo de la ejecución segura.
 func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string) error {
 	// 1. VALIDACIÓN DE SEGURIDAD DE PARÁMETROS (Sanitización Estricta)
-	if len(params) > 0 {
-		for key, value := range params {
-			if !safeParamRegex.MatchString(value) {
-				return fmt.Errorf("SEGURIDAD: El valor del parámetro '%s' contiene caracteres inválidos o empieza con un guion. Solo se permiten [a-zA-Z0-9._-] y no puede empezar con '-'", key)
-			}
-			// Validación redundante pero explícita contra path traversal relativo.
-			if value == ".." {
-				return fmt.Errorf("SEGURIDAD: Uso de '..' no permitido en parámetros")
-			}
+	for key, value := range params {
+		if !safeParamRegex.MatchString(value) {
+			return fmt.Errorf("SEGURIDAD: El valor del parámetro '%s' contiene caracteres inválidos o empieza con un guion. Solo se permiten [a-zA-Z0-9._-] y no puede empezar con '-'", key)
+		}
+		if value == ".." {
+			return fmt.Errorf("SEGURIDAD: Uso de '..' no permitido en parámetros")
 		}
 	}
 
-	// 2. PREPARACIÓN DE DATOS PARA LA PLANTILLA
+	// <<-- INICIO: NUEVA VALIDACIÓN DE PARÁMETROS FALTANTES -->>
+	// 2. VERIFICAR QUE TODOS LOS PARÁMETROS REQUERIDOS EN LA PLANTILLA ESTÁN PRESENTES
+	requiredParams := templateParamRegex.FindAllStringSubmatch(commandTemplate, -1)
+	for _, match := range requiredParams {
+		paramName := match[1] // El primer grupo de captura es el nombre del parámetro.
+		if _, ok := params[paramName]; !ok {
+			return fmt.Errorf("SEGURIDAD: El comando requiere el parámetro '%s', pero no fue proporcionado por el cliente", paramName)
+		}
+	}
+	// <<-- FIN: NUEVA VALIDACIÓN -->>
+
+	// 3. PREPARACIÓN DE DATOS PARA LA PLANTILLA
 	templateData := struct {
 		SourceIP string
 		Params   map[string]string
@@ -98,7 +107,6 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	}
 	finalCommand := buf.String()
 
-	// --- LÓGICA DE TIMEOUT CON CONTEXT ---
 	ctx := context.Background()
 	var cancel context.CancelFunc
 	if timeoutSeconds > 0 {
@@ -112,7 +120,6 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// --- LÓGICA DE EJECUCIÓN CON PRIVILEGIOS REDUCIDOS ---
 	if runAsUser != "" {
 		u, err := user.Lookup(runAsUser)
 		if err != nil {
@@ -132,7 +139,6 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
 	}
-	// --------------------------------------------------------
 
 	slog.Info("Ejecutando comando en el shell",
 		"type", commandType,

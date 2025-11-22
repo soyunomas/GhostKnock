@@ -1,25 +1,33 @@
-# test.yaml
+# test.yaml - Configuración para la prueba de cifrado E2E
+
+# 0. IDENTIDAD DEL SERVIDOR
+# Debe apuntar a la clave PRIVADA que generamos para el servidor.
+server_private_key_path: "./server_key"
+
+# 1. LISTENER
 listener:
   interface: "lo"       # Escuchar solo en loopback (127.0.0.1)
   port: 3001
   listen_ip: "127.0.0.1" # Forzar escucha en IP local
 
+# 2. LOGGING
 logging:
   log_level: "debug"    # Veremos todo lo que pasa en la consola
 
+# 3. USUARIOS
 users:
   - name: "tester_local"
-    # La clave pública que me has proporcionado
-    public_key: "KbZ6k5mCxARu3722B7M+dyEyHFfrc1BjBpYswF7t/mw="
+    # IMPORTANTE: Pega aquí la clave PÚBLICA del CLIENTE del Paso 1.
+    public_key: "d+7FBzdVdvtDl3D9g5uENDRQ74UiYUzPMsODkMC3u2E="
     actions:
       - "write-test"
     source_ips:
       - "127.0.0.1/32"  # Solo permitir origen local
 
+# 4. ACCIONES
 actions:
   "write-test":
     # El comando usa los parámetros definidos en el template.
-    # IMPORTANTE: Los valores de los parámetros deben cumplir la regex ^[a-zA-Z0-9._-]+$
     command: 'echo "Este es el parametro1={{.Params.p1}}, parametro2={{.Params.p2}}, parametro3={{.Params.p3}}" > /tmp/prueba.txt'
     timeout_seconds: 2
     cooldown_seconds: 0 # Sin espera para poder testear rápido
