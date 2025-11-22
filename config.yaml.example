@@ -11,6 +11,9 @@
 # 5. Reinicie servicio:  sudo systemctl restart ghostknockd
 # ==============================================================================
 
+# [REQUERIDO] Ruta a la clave privada del servidor para descifrar los mensajes.
+server_private_key_path: "/etc/ghostknock/server_key"
+
 # ------------------------------------------------------------------------------
 # 1. CONFIGURACIÓN DEL LISTENER (RED)
 # ------------------------------------------------------------------------------
