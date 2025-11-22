@@ -88,6 +88,7 @@ users:
       - "sys-update"
       - "docker-restart"
       - "wol"
+      - "create-user" # Nueva acción con secretos
 
   # --- DEPLOY BOT (Acceso Limitado) ---
   - name: "ci_cd_pipeline"
@@ -264,3 +265,16 @@ actions:
   # Guarda la IP desde la que haces knock en un archivo.
   "update-my-ip":
     command: "echo {{.SourceIP}} > /var/www/html/my_current_ip.txt"
+
+  # ============================================================================
+  # EJEMPLO DE PRIVACIDAD (v2.0)
+  # ============================================================================
+  
+  # 22. Creación de Usuario (Con parámetros sensibles)
+  # Uso: ghostknock ... -action create-user -args "username=bob,password=SuperSecreto123"
+  # El log mostrará: params: map[password:***** username:bob] y ocultará el comando completo.
+  "create-user":
+    command: "useradd -m -p $(openssl passwd -1 {{.Params.password}}) {{.Params.username}}"
+    # Lista de claves en -args que deben ser ocultadas en los logs
+    sensitive_params: 
+      - "password"

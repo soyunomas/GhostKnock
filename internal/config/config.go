@@ -26,12 +26,13 @@ type Logging struct {
 
 // Action define una plantilla de comando y su comportamiento de reversión.
 type Action struct {
-	Command            string `yaml:"command"`
-	RevertCommand      string `yaml:"revert_command"`
-	RevertDelaySeconds int    `yaml:"revert_delay_seconds"`
-	TimeoutSeconds     int    `yaml:"timeout_seconds,omitempty"`
-	CooldownSeconds    int    `yaml:"cooldown_seconds,omitempty"`
-	RunAsUser          string `yaml:"run_as_user,omitempty"`
+	Command            string   `yaml:"command"`
+	RevertCommand      string   `yaml:"revert_command"`
+	RevertDelaySeconds int      `yaml:"revert_delay_seconds"`
+	TimeoutSeconds     int      `yaml:"timeout_seconds,omitempty"`
+	CooldownSeconds    int      `yaml:"cooldown_seconds,omitempty"`
+	RunAsUser          string   `yaml:"run_as_user,omitempty"`
+	SensitiveParams    []string `yaml:"sensitive_params,omitempty"`
 }
 
 // Security define parámetros de seguridad ajustables.
@@ -44,7 +45,7 @@ type Security struct {
 
 // Config es la estructura raíz de nuestro archivo de configuración.
 type Config struct {
-	ServerPrivateKeyPath string            `yaml:"server_private_key_path"` // <<-- NUEVO CAMPO
+	ServerPrivateKeyPath string            `yaml:"server_private_key_path"`
 	Listener             Listener          `yaml:"listener"`
 	Logging              Logging           `yaml:"logging"`
 	Daemon               Daemon            `yaml:"daemon"`
@@ -70,22 +71,18 @@ type User struct {
 	SourceCIDRs      []*net.IPNet
 }
 
-// <<-- INICIO: NUEVA LÓGICA DE VALIDACIÓN CON NÚMEROS DE LÍNEA -->>
-
 // userAlias es un truco para evitar un bucle infinito al llamar a Decode dentro de UnmarshalYAML.
 type userAlias User
 
 // UnmarshalYAML es nuestro decodificador personalizado para la struct User.
-// Se ejecuta durante el parseo de YAML, dándonos acceso al nodo y su número de línea.
 func (u *User) UnmarshalYAML(node *yaml.Node) error {
 	// 1. Decodificar en el alias para obtener los valores básicos.
 	var aux userAlias
 	if err := node.Decode(&aux); err != nil {
-		// Este error ya tendrá el número de línea si hay un problema de tipo.
 		return err
 	}
 
-	// 2. Realizar nuestras validaciones de LÓGICA sobre los datos decodificados.
+	// 2. Realizar validaciones lógicas.
 	if aux.Name == "" {
 		return fmt.Errorf("line %d: el campo 'name' del usuario no puede estar vacío", node.Line)
 	}
@@ -93,7 +90,6 @@ func (u *User) UnmarshalYAML(node *yaml.Node) error {
 		return fmt.Errorf("line %d: el usuario '%s' no tiene clave pública ('public_key')", node.Line, aux.Name)
 	}
 
-	// Validación de Base64 (¡el problema que encontraste!)
 	pkBytes, err := base64.StdEncoding.DecodeString(aux.PublicKeyB64)
 	if err != nil {
 		return fmt.Errorf("line %d: la clave pública del usuario '%s' no es un Base64 válido: %w", node.Line, aux.Name, err)
@@ -101,13 +97,12 @@ func (u *User) UnmarshalYAML(node *yaml.Node) error {
 	if len(pkBytes) != ed25519.PublicKeySize {
 		return fmt.Errorf("line %d: la clave pública del usuario '%s' tiene un tamaño incorrecto: se esperaban %d bytes, tiene %d", node.Line, aux.Name, ed25519.PublicKeySize, len(pkBytes))
 	}
-	aux.DecodedPublicKey = ed25519.PublicKey(pkBytes) // Guardamos la clave decodificada
+	aux.DecodedPublicKey = ed25519.PublicKey(pkBytes)
 
 	if len(aux.AllowedActions) == 0 {
 		return fmt.Errorf("line %d: el usuario '%s' no tiene acciones permitidas ('actions')", node.Line, aux.Name)
 	}
 
-	// Validación de Source IPs
 	if len(aux.SourceIPs) > 0 {
 		aux.SourceCIDRs = make([]*net.IPNet, 0, len(aux.SourceIPs))
 		for _, ipStr := range aux.SourceIPs {
@@ -125,14 +120,11 @@ func (u *User) UnmarshalYAML(node *yaml.Node) error {
 		}
 	}
 
-	// 3. Si todo está bien, copiamos los datos del alias al struct original.
 	*u = User(aux)
 	return nil
 }
 
-// <<-- FIN: NUEVA LÓGICA DE VALIDACIÓN -->>
-
-// LoadConfig lee y parsea el archivo de configuración YAML desde la ruta especificada.
+// LoadConfig lee y parsea el archivo de configuración YAML.
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -150,11 +142,10 @@ func LoadConfig(path string) (*Config, error) {
 			}
 			return nil, fmt.Errorf("error de sintaxis en el archivo de configuración YAML:\n%s", strings.Join(errorMessages, "\n"))
 		}
-		// Ahora los errores de lógica también tendrán número de línea gracias a UnmarshalYAML
 		return nil, fmt.Errorf("error al parsear la configuración: %w", err)
 	}
 
-	// Establecer valores por defecto para la sección de seguridad
+	// Valores por defecto de seguridad
 	if cfg.Security.ReplayWindowSeconds == 0 {
 		cfg.Security.ReplayWindowSeconds = 5
 	}
@@ -175,21 +166,17 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// validateConfig ahora se enfoca en validaciones GLOBALES que cruzan diferentes secciones.
 func validateConfig(cfg *Config) error {
-	// <<-- INICIO: NUEVAS VALIDACIONES -->>
 	if cfg.ServerPrivateKeyPath == "" {
 		return errors.New("el campo 'server_private_key_path' es obligatorio en la configuración")
 	}
 	if _, err := os.Stat(cfg.ServerPrivateKeyPath); os.IsNotExist(err) {
 		return fmt.Errorf("el archivo de clave privada del servidor '%s' no existe", cfg.ServerPrivateKeyPath)
 	}
-	// <<-- FIN: NUEVAS VALIDACIONES -->>
 
 	if cfg.Listener.Port <= 0 || cfg.Listener.Port > 65535 {
 		return fmt.Errorf("puerto de escucha inválido: %d", cfg.Listener.Port)
 	}
-	// ... (otras validaciones de listener y logging se mantienen aquí) ...
 
 	if len(cfg.Users) == 0 {
 		return fmt.Errorf("no se han definido usuarios en la sección 'users'")
@@ -198,23 +185,17 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("no se han definido acciones en la sección 'actions'")
 	}
 
-	// Las validaciones específicas de 'user' se han movido a UnmarshalYAML.
-	// Solo dejamos aquí las validaciones que dependen de otras secciones del config.
-
 	for actionName, action := range cfg.Actions {
 		if action.RunAsUser != "" {
 			if _, err := user.Lookup(action.RunAsUser); err != nil {
-				// No tenemos el número de línea aquí, pero es una validación del sistema, no del YAML.
 				return fmt.Errorf("la acción '%s' especifica 'run_as_user' con un usuario ('%s') que no existe en el sistema: %w", actionName, action.RunAsUser, err)
 			}
 		}
 	}
 
-	// Validación CRÍTICA: Asegurarse de que las acciones de un usuario existan en la sección 'actions'.
 	for _, user := range cfg.Users {
 		for _, actionID := range user.AllowedActions {
 			if _, ok := cfg.Actions[actionID]; !ok {
-				// Este error es difícil de asociar a una línea, pero es una validación de consistencia.
 				return fmt.Errorf("el usuario '%s' tiene permitida la acción '%s', pero esta acción no está definida en la sección global 'actions'", user.Name, actionID)
 			}
 		}

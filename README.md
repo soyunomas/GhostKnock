@@ -17,10 +17,11 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 *   🔐 **Criptografía Fuerte de Doble Capa:**
     *   **Autenticación:** Firmas `Ed25519` para verificar la identidad del remitente.
     *   **Confidencialidad:** Cifrado de extremo a extremo con `X25519` (`nacl/box`) para ocultar la acción y los parámetros, previniendo fugas de información.
+*   🕵️ **Privacidad en Logs:** Capacidad de redactar automáticamente parámetros sensibles (como contraseñas) en los registros del sistema para que nunca se escriban en texto plano en el disco.
 *   🧩 **Parámetros Dinámicos:** El cliente puede enviar argumentos (ej. IPs, nombres de servicio) que se inyectan de forma segura en los comandos del servidor.
 *   🛡️ **Seguridad Ofensiva/Defensiva:**
     *   **Invisible:** No abre puertos TCP.
-    *   **Anti-Replay:** Protección contra ataques de repetición mediante timestamp.
+    *   **Anti-Replay:** Protección contra ataques de repetición mediante timestamp y caché de firmas.
     *   **Sanitización Estricta:** Los parámetros entrantes pasan por una lista blanca (`Allowlist`) para prevenir inyección de comandos.
     *   **Anti-DoS:** Verificación criptográfica previa al procesamiento de datos.
 *   ⚡ **Multiplataforma:** Cliente nativo para **Linux** y **Windows**.
@@ -36,13 +37,13 @@ Descarga la última versión desde [Releases](https://github.com/soyunomas/Ghost
 
 *   **Para el Servidor (Demonio + Herramientas):**
     ```bash
-    sudo dpkg -i ghostknock_1.1.0_amd64.deb
+    sudo dpkg -i ghostknock_2.0.0_amd64.deb
     # Se instala el servicio systemd y se asegura el directorio /etc/ghostknock
     ```
 
 *   **Para Clientes Remotos (Solo Herramientas):**
     ```bash
-    sudo dpkg -i ghostknock-client_1.1.0_amd64.deb
+    sudo dpkg -i ghostknock-client_2.0.0_amd64.deb
     ```
 
 ### Opción B: Ejecutables para Windows
@@ -64,7 +65,7 @@ make build-windows  # Compila .exe para Windows
 ## 🚀 Guía de Inicio Rápido (Protocolo v2 con Cifrado)
 
 ### 1. Generar la Identidad del Servidor (En el Servidor)
-El servidor ahora necesita su propio par de claves para el cifrado. Genéralo una sola vez.
+El servidor necesita su propio par de claves para el cifrado.
 
 ```bash
 # Como root en el servidor
@@ -76,7 +77,7 @@ sudo chmod 600 /etc/ghostknock/server_key*
 > **Comparte de forma segura el archivo `/etc/ghostknock/server_key.pub` con todos los clientes.**
 
 ### 2. Generar tu Identidad de Cliente (En tu PC)
-Esto no ha cambiado. Necesitas un par de claves: la privada se queda contigo, la pública va al servidor.
+Necesitas un par de claves: la privada se queda contigo, la pública va al servidor.
 
 ```bash
 # En tu máquina local (Linux, Mac, Windows)
@@ -131,13 +132,14 @@ ghostknock -host IP_DEL_SERVIDOR \
 
 ---
 
-## 💡 Recetario: 10 Ejemplos Prácticos
+## 💡 Recetario: 11 Ejemplos Prácticos
 
 A continuación se presentan configuraciones para `config.yaml` y el comando del cliente correspondiente.
 
 > ⚠️ **Nota de Seguridad sobre Parámetros:**
 > Los argumentos pasados con `-args` solo permiten: **Letras (a-Z), Números (0-9), Puntos (.), Guiones bajos (_) y Guiones medios (-)**.
 > Cualquier otro carácter (espacios, :, /, ;) provocará el rechazo del paquete.
+> **¡Nuevo!** Los parámetros no pueden comenzar con un guion (`-`) para evitar inyección de flags.
 
 ### 1. Test de Verificación (Hola Mundo)
 Crea un archivo para verificar que el sistema procesa parámetros correctamente.
@@ -152,7 +154,6 @@ Crea un archivo para verificar que el sistema procesa parámetros correctamente.
     ```bash
     ghostknock -host 127.0.0.1 -action write-test -args "p1=ValorUno,p2=Valor_Dos" -server-pubkey RUTA_A_SERVER.PUB
     ```
-*   **Resultado:** `cat /tmp/prueba.txt` mostrará el contenido.
 
 ### 2. Abrir SSH Temporalmente (Port Knocking 2.0)
 Abre el puerto 22 solo para tu IP actual y lo cierra automáticamente tras 5 minutos.
@@ -170,7 +171,7 @@ Abre el puerto 22 solo para tu IP actual y lo cierra automáticamente tras 5 min
     ```
 
 ### 3. Reiniciar Servicios Específicos
-Reinicia un servicio pasando su nombre como parámetro. Útil para servidores web o bases de datos.
+Reinicia un servicio pasando su nombre como parámetro.
 
 *   **Config (Server):**
     ```yaml
@@ -184,7 +185,7 @@ Reinicia un servicio pasando su nombre como parámetro. Útil para servidores we
     ```
 
 ### 4. Banear IP Atacante (Firewall)
-Si detectas un ataque desde una IP, bloquéala remotamente sin necesidad de entrar por SSH.
+Si detectas un ataque desde una IP, bloquéala remotamente.
 
 *   **Config (Server):**
     ```yaml
@@ -202,7 +203,6 @@ Actualiza el código de una aplicación web para una rama concreta.
 *   **Config (Server):**
     ```yaml
     "deploy-app":
-      # Ejecutamos como www-data por seguridad
       run_as_user: "www-data"
       command: "cd /var/www/html && git fetch && git checkout {{.Params.branch}} && git pull"
     ```
@@ -237,22 +237,8 @@ Cierra todo el tráfico entrante nuevo en caso de emergencia de seguridad.
     ghostknock -host MISERVIDOR -action lockdown -server-pubkey RUTA_A_SERVER.PUB
     ```
 
-### 8. Mantenimiento y Limpieza
-Ejecuta scripts de mantenimiento preexistentes en el servidor.
-
-*   **Config (Server):**
-    ```yaml
-    "cleanup":
-      command: "/opt/scripts/rotate_logs.sh {{.Params.mode}}"
-    ```
-*   **Cliente:**
-    ```bash
-    ghostknock -host MISERVIDOR -action cleanup -args "mode=full" -server-pubkey RUTA_A_SERVER.PUB
-    ```
-
-### 9. Wake-on-LAN Proxy
+### 8. Wake-on-LAN Proxy
 Enciende una máquina de la red interna.
-*Nota: Usamos guiones en la MAC porque los dos puntos (:) no están permitidos en los parámetros.*
 
 *   **Config (Server):**
     ```yaml
@@ -264,7 +250,7 @@ Enciende una máquina de la red interna.
     ghostknock -host MISERVIDOR -action wol-pc -args "mac=aa-bb-cc-dd-ee-ff" -server-pubkey RUTA_A_SERVER.PUB
     ```
 
-### 10. Actualización del Sistema
+### 9. Actualización del Sistema
 Lanza una actualización de paquetes del sistema operativo.
 
 *   **Config (Server):**
@@ -278,6 +264,22 @@ Lanza una actualización de paquetes del sistema operativo.
     ```bash
     ghostknock -host MISERVIDOR -action sys-update -server-pubkey RUTA_A_SERVER.PUB
     ```
+
+### 10. Creación de Usuario (Con Privacidad)
+Crea un usuario en el sistema pasando la contraseña. Gracias a `sensitive_params`, la contraseña no aparecerá en los logs del sistema.
+
+*   **Config (Server):**
+    ```yaml
+    "create-user":
+      command: "useradd -m -p $(openssl passwd -1 {{.Params.password}}) {{.Params.username}}"
+      sensitive_params:
+        - "password"
+    ```
+*   **Cliente:**
+    ```bash
+    ghostknock -host MISERVIDOR -action create-user -args "username=invitado,password=Secreto.123" -server-pubkey RUTA_A_SERVER.PUB
+    ```
+*   **Resultado Log:** `command="[REDACTADO] useradd ... (Valores ocultos por sensitive_params)"` y `params=map[password:***** username:invitado]`
 
 ---
 
@@ -309,6 +311,7 @@ Aquí se detallan todas las opciones disponibles para configurar el demonio.
 | | `cooldown_seconds` | int | ❌ | Tiempo de espera antes de permitir ejecutar esta acción de nuevo. `0` sin cooldown, `-1` usa el global. |
 | | `revert_command` | string | ❌ | Comando que se ejecuta automáticamente tras el retraso. |
 | | `revert_delay_seconds`| int | ❌ | Segundos a esperar antes de ejecutar `revert_command`. |
+| | `sensitive_params` | list | ❌ | Lista de nombres de parámetros que deben ser ocultados (`*****`) en los logs del sistema. |
 
 ---
 

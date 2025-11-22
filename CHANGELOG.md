@@ -8,8 +8,9 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 
 ### Security
 - **Cifrado de Extremo a Extremo (Confidencialidad):** Se ha implementado un cifrado de clave pública (X25519, `nacl/box`) obligatorio para todo el payload. Ahora, la acción y los parámetros enviados son indescifrables para cualquier observador en la red, eliminando por completo las fugas de información y garantizando la confidencialidad. La autenticación se mantiene con la firma Ed25519 original.
+- **Privacidad de Logs (Redacción de Secretos):** Se introduce la directiva `sensitive_params` en la configuración de acciones. Los parámetros marcados en esta lista serán sustituidos por `*****` en los registros del sistema y de depuración, evitando que secretos (como contraseñas o tokens) queden expuestos en texto plano en el disco, mientras que el comando subyacente los recibe correctamente descifrados.
 - **Mitigación de Ataques de Replay:** El demonio ahora mantiene una caché de firmas de paquetes válidos durante la ventana anti-replay. Cualquier paquete con una firma duplicada dentro de esta ventana es descartado, previniendo que un atacante pueda re-ejecutar un comando capturado múltiples veces.
-- **Endurecimiento contra Inyección de Argumentos:** Se ha modificado la validación de parámetros (`-args`) para prohibir que los valores comiencan con un guion (`-`). Esto previene que un parámetro pueda ser interpretado como un flag por el comando subyacente (ej. `ls -R`), cerrando un vector de ataque de inyección de argumentos.
+- **Endurecimiento contra Inyección de Argumentos:** Se ha modificado la validación de parámetros (`-args`) para prohibir que los valores comiencen con un guion (`-`). Esto previene que un parámetro pueda ser interpretado como un flag por el comando subyacente (ej. `ls -R`), cerrando un vector de ataque de inyección de argumentos.
 
 ### Added
 - **Identidad Propia del Servidor:** El demonio `ghostknockd` ahora requiere su propio par de claves Ed25519 para el descifrado. La clave privada se especifica en `config.yaml` a través de la nueva directiva `server_private_key_path`.
