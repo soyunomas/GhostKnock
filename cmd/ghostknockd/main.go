@@ -40,8 +40,9 @@ type ipLimiter struct {
 
 type Server struct {
 	config           *config.Config
-	serverPrivateKey ed25519.PrivateKey // <<-- NUEVO CAMPO
+	serverPrivateKey ed25519.PrivateKey
 	actionCooldowns  map[string]time.Time
+	signaturesCache  map[string]time.Time // <<-- NUEVO: Caché de firmas
 	cacheMutex       sync.RWMutex
 	ipLimiters       map[string]*ipLimiter
 	limitersMutex    sync.Mutex
@@ -102,7 +103,6 @@ func main() {
 
 	slog.Info("Iniciando demonio GhostKnockd...")
 
-	// --- INICIO: Cargar clave privada del servidor ---
 	serverPrivKeyBytes, err := os.ReadFile(cfg.ServerPrivateKeyPath)
 	if err != nil {
 		slog.Error("Error crítico al leer la clave privada del servidor", "path", cfg.ServerPrivateKeyPath, "error", err)
@@ -112,7 +112,6 @@ func main() {
 		slog.Error("El archivo de clave privada del servidor tiene un tamaño incorrecto", "path", cfg.ServerPrivateKeyPath)
 		os.Exit(1)
 	}
-	// --- FIN: Cargar clave privada del servidor ---
 
 	if cfg.Daemon.PIDFile != "" {
 		pid := os.Getpid()
@@ -141,8 +140,9 @@ func main() {
 
 	server := &Server{
 		config:           cfg,
-		serverPrivateKey: ed25519.PrivateKey(serverPrivKeyBytes), // <<-- ALMACENAR CLAVE
+		serverPrivateKey: ed25519.PrivateKey(serverPrivKeyBytes),
 		actionCooldowns:  make(map[string]time.Time),
+		signaturesCache:  make(map[string]time.Time), // <<-- NUEVO: Inicialización
 		ipLimiters:       make(map[string]*ipLimiter),
 	}
 
@@ -217,14 +217,25 @@ func (s *Server) startCacheCleaner() {
 	defer ticker.Stop()
 	for range ticker.C {
 		s.cacheMutex.Lock()
-		purgedCount := 0
+		
+		// 1. Limpieza de Cooldowns
 		expirationDuration := time.Duration(s.config.Security.DefaultActionCooldownSeconds*2) * time.Second
+		purgedCount := 0
 		for key, lastSeen := range s.actionCooldowns {
 			if time.Since(lastSeen) > expirationDuration {
 				delete(s.actionCooldowns, key)
 				purgedCount++
 			}
 		}
+
+		// 2. Limpieza de Firmas (NUEVO)
+		now := time.Now()
+		for sig, expiration := range s.signaturesCache {
+			if now.After(expiration) {
+				delete(s.signaturesCache, sig)
+			}
+		}
+
 		s.cacheMutex.Unlock()
 		if purgedCount > 0 {
 			slog.Debug("Limpiadas entradas de cooldown antiguas", "count", purgedCount)
@@ -239,28 +250,45 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
-	// <<-- INICIO: LÓGICA DE PROCESAMIENTO REFACTORIZADA -->>
+	if len(packetInfo.Payload) < ed25519.SignatureSize {
+		return
+	}
+
 	var authorizedUser *config.User
 	var payload *protocol.Payload
 	var err error
 
-	// 1. Iterar sobre los usuarios para encontrar una firma válida
+	// 1. Validar Usuario y Criptografía (Auth-then-Cache)
 	for i := range s.config.Users {
 		user := &s.config.Users[i]
 		payload, err = protocol.VerifyAndDecrypt(packetInfo.Payload, user.DecodedPublicKey, s.serverPrivateKey)
 		if err == nil {
 			authorizedUser = user
-			break // Encontramos al usuario y el payload es válido
+			break
 		}
 	}
 
-	// 2. Si ningún usuario pudo validar el paquete, descartarlo.
 	if authorizedUser == nil {
 		slog.Warn("Paquete descartado", "reason", "invalid_signature_or_decryption_failed", "source_ip", packetInfo.SourceIP.String())
 		return
 	}
 
-	// 3. A partir de aquí, el payload está autenticado y descifrado.
+	// 2. Caché Anti-Replay (Solo si Auth OK)
+	signature := string(packetInfo.Payload[:ed25519.SignatureSize])
+	
+	s.cacheMutex.Lock()
+	if _, exists := s.signaturesCache[signature]; exists {
+		s.cacheMutex.Unlock()
+		slog.Warn("Replay Attack detectado", "user", authorizedUser.Name, "source_ip", packetInfo.SourceIP.String())
+		return
+	}
+	
+	// Añadir a caché con TTL = Ventana + 1s
+	ttl := time.Duration(s.config.Security.ReplayWindowSeconds+1) * time.Second
+	s.signaturesCache[signature] = time.Now().Add(ttl)
+	s.cacheMutex.Unlock()
+
+	// 3. Validaciones de Negocio y Timestamp
 	timestamp := time.Unix(0, payload.Timestamp)
 	age := time.Since(timestamp)
 	replayWindow := time.Duration(s.config.Security.ReplayWindowSeconds) * time.Second
@@ -268,7 +296,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		slog.Warn("Paquete descartado", "reason", "outside_replay_window", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "age_seconds", age.Seconds())
 		return
 	}
-	// <<-- FIN: LÓGICA DE PROCESAMIENTO REFACTORIZADA -->>
 
 	if !isActionAllowed(payload.ActionID, authorizedUser.AllowedActions) {
 		slog.Warn("Paquete descartado", "reason", "unauthorized_action", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "action_id", payload.ActionID)
