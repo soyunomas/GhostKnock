@@ -42,8 +42,8 @@ type Server struct {
 	config           *config.Config
 	serverPrivateKey ed25519.PrivateKey
 	actionCooldowns  map[string]time.Time
-	signaturesCache  map[string]time.Time // <<-- NUEVO: Caché de firmas
-	cacheMutex       sync.RWMutex
+	signaturesCache  map[string]time.Time
+	cacheMutex       sync.Mutex
 	ipLimiters       map[string]*ipLimiter
 	limitersMutex    sync.Mutex
 }
@@ -142,7 +142,7 @@ func main() {
 		config:           cfg,
 		serverPrivateKey: ed25519.PrivateKey(serverPrivKeyBytes),
 		actionCooldowns:  make(map[string]time.Time),
-		signaturesCache:  make(map[string]time.Time), // <<-- NUEVO: Inicialización
+		signaturesCache:  make(map[string]time.Time),
 		ipLimiters:       make(map[string]*ipLimiter),
 	}
 
@@ -217,7 +217,7 @@ func (s *Server) startCacheCleaner() {
 	defer ticker.Stop()
 	for range ticker.C {
 		s.cacheMutex.Lock()
-		
+
 		// 1. Limpieza de Cooldowns
 		expirationDuration := time.Duration(s.config.Security.DefaultActionCooldownSeconds*2) * time.Second
 		purgedCount := 0
@@ -228,7 +228,7 @@ func (s *Server) startCacheCleaner() {
 			}
 		}
 
-		// 2. Limpieza de Firmas (NUEVO)
+		// 2. Limpieza de Firmas
 		now := time.Now()
 		for sig, expiration := range s.signaturesCache {
 			if now.After(expiration) {
@@ -254,11 +254,22 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
+	// 1. Verificación Temprana de Caché (Anti-Replay & Anti-CPU-DoS)
+	signature := string(packetInfo.Payload[:ed25519.SignatureSize])
+	
+	s.cacheMutex.Lock()
+	if _, exists := s.signaturesCache[signature]; exists {
+		s.cacheMutex.Unlock()
+		slog.Warn("Replay Attack detectado (Pre-Auth)", "source_ip", packetInfo.SourceIP.String())
+		return
+	}
+	s.cacheMutex.Unlock()
+
+	// 2. Validar Usuario y Criptografía
 	var authorizedUser *config.User
 	var payload *protocol.Payload
 	var err error
 
-	// 1. Validar Usuario y Criptografía (Auth-then-Cache)
 	for i := range s.config.Users {
 		user := &s.config.Users[i]
 		payload, err = protocol.VerifyAndDecrypt(packetInfo.Payload, user.DecodedPublicKey, s.serverPrivateKey)
@@ -273,22 +284,13 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
-	// 2. Caché Anti-Replay (Solo si Auth OK)
-	signature := string(packetInfo.Payload[:ed25519.SignatureSize])
-	
-	s.cacheMutex.Lock()
-	if _, exists := s.signaturesCache[signature]; exists {
-		s.cacheMutex.Unlock()
-		slog.Warn("Replay Attack detectado", "user", authorizedUser.Name, "source_ip", packetInfo.SourceIP.String())
-		return
-	}
-	
-	// Añadir a caché con TTL = Ventana + 1s
+	// 3. Actualizar Caché Anti-Replay
 	ttl := time.Duration(s.config.Security.ReplayWindowSeconds+1) * time.Second
+	s.cacheMutex.Lock()
 	s.signaturesCache[signature] = time.Now().Add(ttl)
 	s.cacheMutex.Unlock()
 
-	// 3. Validaciones de Negocio y Timestamp
+	// 4. Validaciones de Negocio y Timestamp
 	timestamp := time.Unix(0, payload.Timestamp)
 	age := time.Since(timestamp)
 	replayWindow := time.Duration(s.config.Security.ReplayWindowSeconds) * time.Second
@@ -327,35 +329,41 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
+	// LÓGICA DE COOLDOWN CORREGIDA
+	// Por defecto usamos el cooldown global
 	effectiveCooldown := time.Duration(s.config.Security.DefaultActionCooldownSeconds) * time.Second
-	if actionDef.CooldownSeconds >= 0 {
-		effectiveCooldown = time.Duration(actionDef.CooldownSeconds) * time.Second
+	
+	// Si el usuario especificó un valor (no es nil) y es válido (>=0), lo usamos.
+	// Esto cubre el caso de poner '0' explícitamente para desactivar el cooldown,
+	// y respeta el caso de no poner nada (nil) para usar el global.
+	// También mantenemos retrocompatibilidad para quienes usaban -1 para forzar global/anular.
+	if actionDef.CooldownSeconds != nil && *actionDef.CooldownSeconds >= 0 {
+		effectiveCooldown = time.Duration(*actionDef.CooldownSeconds) * time.Second
 	}
 
 	cooldownKey := fmt.Sprintf("%s:%s", authorizedUser.PublicKeyB64, payload.ActionID)
 
-	if effectiveCooldown > 0 {
-		s.cacheMutex.RLock()
-		lastExecutionTime, onCooldown := s.actionCooldowns[cooldownKey]
-		s.cacheMutex.RUnlock()
+	// 5. Gestión de Cooldowns con Bloqueo Seguro
+	s.cacheMutex.Lock()
 
-		if onCooldown {
-			elapsed := time.Since(lastExecutionTime)
-			if elapsed < effectiveCooldown {
-				remaining := effectiveCooldown - elapsed
-				slog.Warn(
-					"Acción descartada",
-					"reason", "cooldown_active",
-					"user", authorizedUser.Name,
-					"action_id", payload.ActionID,
-					"remaining_seconds", remaining.Seconds(),
-				)
-				return
-			}
+	lastExecutionTime, onCooldown := s.actionCooldowns[cooldownKey]
+
+	if effectiveCooldown > 0 && onCooldown {
+		elapsed := time.Since(lastExecutionTime)
+		if elapsed < effectiveCooldown {
+			s.cacheMutex.Unlock()
+			remaining := effectiveCooldown - elapsed
+			slog.Warn(
+				"Acción descartada",
+				"reason", "cooldown_active",
+				"user", authorizedUser.Name,
+				"action_id", payload.ActionID,
+				"remaining_seconds", remaining.Seconds(),
+			)
+			return
 		}
 	}
 
-	s.cacheMutex.Lock()
 	s.actionCooldowns[cooldownKey] = time.Now()
 	s.cacheMutex.Unlock()
 

@@ -30,7 +30,8 @@ type Action struct {
 	RevertCommand      string   `yaml:"revert_command"`
 	RevertDelaySeconds int      `yaml:"revert_delay_seconds"`
 	TimeoutSeconds     int      `yaml:"timeout_seconds,omitempty"`
-	CooldownSeconds    int      `yaml:"cooldown_seconds,omitempty"`
+	// Se cambia a puntero (*int) para distinguir entre 0 (sin cooldown explícito) y nil (usar global).
+	CooldownSeconds    *int     `yaml:"cooldown_seconds,omitempty"`
 	RunAsUser          string   `yaml:"run_as_user,omitempty"`
 	SensitiveParams    []string `yaml:"sensitive_params,omitempty"`
 }
@@ -172,6 +173,11 @@ func validateConfig(cfg *Config) error {
 	}
 	if _, err := os.Stat(cfg.ServerPrivateKeyPath); os.IsNotExist(err) {
 		return fmt.Errorf("el archivo de clave privada del servidor '%s' no existe", cfg.ServerPrivateKeyPath)
+	}
+
+	// Se ha mantenido la corrección anterior de validación de interfaz
+	if cfg.Listener.Interface == "" {
+		return errors.New("el campo 'listener.interface' es obligatorio en la configuración")
 	}
 
 	if cfg.Listener.Port <= 0 || cfg.Listener.Port > 65535 {

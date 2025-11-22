@@ -9,7 +9,8 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 ### Security
 - **Cifrado de Extremo a Extremo (Confidencialidad):** Se ha implementado un cifrado de clave pública (X25519, `nacl/box`) obligatorio para todo el payload. Ahora, la acción y los parámetros enviados son indescifrables para cualquier observador en la red, eliminando por completo las fugas de información y garantizando la confidencialidad. La autenticación se mantiene con la firma Ed25519 original.
 - **Privacidad de Logs (Redacción de Secretos):** Se introduce la directiva `sensitive_params` en la configuración de acciones. Los parámetros marcados en esta lista serán sustituidos por `*****` en los registros del sistema y de depuración, evitando que secretos (como contraseñas o tokens) queden expuestos en texto plano en el disco, mientras que el comando subyacente los recibe correctamente descifrados.
-- **Mitigación de Ataques de Replay:** El demonio ahora mantiene una caché de firmas de paquetes válidos durante la ventana anti-replay. Cualquier paquete con una firma duplicada dentro de esta ventana es descartado, previniendo que un atacante pueda re-ejecutar un comando capturado múltiples veces.
+- **Mitigación Avanzada de Ataques de Replay:** El demonio mantiene una caché de firmas y verifica la duplicidad **antes** de realizar operaciones criptográficas costosas. Esto previene ataques de denegación de servicio (DoS) por agotamiento de CPU, además de evitar la re-ejecución lógica de comandos.
+- **Endurecimiento de Concurrencia (Fix TOCTOU):** Se ha implementado un bloqueo estricto (`Mutex`) para la gestión de los tiempos de enfriamiento (cooldowns), eliminando vulnerabilidades de condición de carrera (Time-of-Check to Time-of-Use) que existían en versiones de desarrollo previas.
 - **Endurecimiento contra Inyección de Argumentos:** Se ha modificado la validación de parámetros (`-args`) para prohibir que los valores comiencen con un guion (`-`). Esto previene que un parámetro pueda ser interpretado como un flag por el comando subyacente (ej. `ls -R`), cerrando un vector de ataque de inyección de argumentos.
 
 ### Added
@@ -22,6 +23,10 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 - **BREAKING CHANGE: Nuevo Flag de Cliente Requerido:** El cliente `ghostknock` ahora requiere el flag `-server-pubkey` para especificar la clave pública del servidor, necesaria para cifrar la comunicación.
 - **BREAKING CHANGE: Configuración de Servidor Modificada:** El archivo `config.yaml` ahora requiere la directiva `server_private_key_path` en el nivel raíz.
 - **Configuración de Seguridad Flexible:** Se ha movido la configuración de parámetros de seguridad clave (como la ventana anti-replay y el cooldown por defecto) del código fuente a una nueva sección opcional `security:` en `config.yaml`.
+
+### Fixed
+- **Herencia de Cooldown por Defecto (Zero-Value Trap):** Se corrigió un error lógico donde omitir `cooldown_seconds` en una acción desactivaba el enfriamiento (0s) en lugar de heredar el valor global por defecto. Ahora, la ausencia del campo aplica correctamente la política de seguridad global.
+- **Consistencia de Validación:** La herramienta de validación (`-t`) ahora marca estrictamente el campo `listener.interface` como obligatorio, alineando la validación estática con los requisitos reales de ejecución y evitando fallos en tiempo de ejecución.
 
 ## [1.1.0]
 
