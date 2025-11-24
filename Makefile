@@ -1,4 +1,4 @@
-# Makefile para el proyecto GhostKnock v1.1.0
+# Makefile para el proyecto GhostKnock v2.0.0
 
 # ==============================================================================
 # Variables de Configuración
@@ -8,7 +8,7 @@ GO ?= go
 GOFLAGS ?= -v
 
 # --- Variables para el empaquetado DEB ---
-VERSION := 1.1.0
+VERSION := 2.0.0
 ARCH := $(shell dpkg --print-architecture)
 # Inyectamos la versión en tiempo de compilación para los flags -version
 LDFLAGS_VERSION := -ldflags="-X main.version=$(VERSION)"
