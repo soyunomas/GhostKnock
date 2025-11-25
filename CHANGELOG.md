@@ -8,6 +8,7 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 
 ### Security
 - **Cifrado de Extremo a Extremo (Confidencialidad):** Se ha implementado un cifrado de clave pública (X25519, `nacl/box`) obligatorio para todo el payload. Ahora, la acción y los parámetros enviados son indescifrables para cualquier observador en la red, eliminando por completo las fugas de información y garantizando la confidencialidad. La autenticación se mantiene con la firma Ed25519 original.
+- **Ejecución Asíncrona (Prevención de Bloqueo):** La ejecución de comandos ahora se realiza en Goroutines independientes ("Fire-and-Forget"). Esto evita que acciones de larga duración (ej. actualizaciones del sistema) bloqueen el bucle principal de recepción de paquetes, garantizando que el servidor siga escuchando nuevos knocks mientras procesa tareas en segundo plano.
 - **Privacidad de Logs (Redacción de Secretos):** Se introduce la directiva `sensitive_params` en la configuración de acciones. Los parámetros marcados en esta lista serán sustituidos por `*****` en los registros del sistema y de depuración, evitando que secretos (como contraseñas o tokens) queden expuestos en texto plano en el disco, mientras que el comando subyacente los recibe correctamente descifrados.
 - **Mitigación Avanzada de Ataques de Replay:** El demonio mantiene una caché de firmas y verifica la duplicidad **antes** de realizar operaciones criptográficas costosas. Esto previene ataques de denegación de servicio (DoS) por agotamiento de CPU, además de evitar la re-ejecución lógica de comandos.
 - **Validación Estricta de Longitud de Paquete (Anti-DoS/Allocation):** Se ha establecido un límite estricto de 1KB para los payloads UDP en la capa de escucha (`listener`). Los paquetes que exceden este tamaño se descartan inmediatamente antes de pasar a la lógica de negocio, previniendo ataques de agotamiento de memoria. Se aumentó el `SnapLen` de captura a 1518 bytes para garantizar la lectura íntegra de paquetes grandes antes de su validación.
@@ -48,7 +49,3 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 ## [1.0.0]
 
 - Lanzamiento inicial del proyecto GhostKnock.
-
-[Unreleased]: https://github.com/soyunomas/GhostKnock/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/soyunomas/GhostKnock/compare/v1.1.0...v2.0.0
-[1.1.0]: https://github.com/soyunomas/GhostKnock/compare/v1.0.0...v1.1.0
