@@ -168,6 +168,8 @@ mainLoop:
 				slog.Info("El canal del listener se ha cerrado, finalizando.")
 				break mainLoop
 			}
+			// PROCESAMIENTO: Ahora es seguro llamar a processKnock, ya que
+			// la parte pesada se lanza en una goroutine interna.
 			server.processKnock(packetInfo)
 		case sig := <-signalChan:
 			slog.Info("Señal de apagado recibida", "signal", sig.String())
@@ -218,7 +220,6 @@ func (s *Server) startCacheCleaner() {
 	for range ticker.C {
 		s.cacheMutex.Lock()
 
-		// 1. Limpieza de Cooldowns
 		expirationDuration := time.Duration(s.config.Security.DefaultActionCooldownSeconds*2) * time.Second
 		purgedCount := 0
 		for key, lastSeen := range s.actionCooldowns {
@@ -228,7 +229,6 @@ func (s *Server) startCacheCleaner() {
 			}
 		}
 
-		// 2. Limpieza de Firmas
 		now := time.Now()
 		for sig, expiration := range s.signaturesCache {
 			if now.After(expiration) {
@@ -254,7 +254,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
-	// 1. Verificación Temprana de Caché (Anti-Replay & Anti-CPU-DoS)
 	signature := string(packetInfo.Payload[:ed25519.SignatureSize])
 	
 	s.cacheMutex.Lock()
@@ -265,7 +264,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	}
 	s.cacheMutex.Unlock()
 
-	// 2. Validar Usuario y Criptografía
 	var authorizedUser *config.User
 	var payload *protocol.Payload
 	var err error
@@ -284,13 +282,11 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
-	// 3. Actualizar Caché Anti-Replay
 	ttl := time.Duration(s.config.Security.ReplayWindowSeconds+1) * time.Second
 	s.cacheMutex.Lock()
 	s.signaturesCache[signature] = time.Now().Add(ttl)
 	s.cacheMutex.Unlock()
 
-	// 4. Validaciones de Negocio y Timestamp
 	timestamp := time.Unix(0, payload.Timestamp)
 	age := time.Since(timestamp)
 	replayWindow := time.Duration(s.config.Security.ReplayWindowSeconds) * time.Second
@@ -313,12 +309,7 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 			}
 		}
 		if !isIPAllowed {
-			slog.Warn("Paquete descartado",
-				"reason", "unauthorized_source_ip",
-				"user", authorizedUser.Name,
-				"action_id", payload.ActionID,
-				"source_ip", packetInfo.SourceIP.String(),
-			)
+			slog.Warn("Paquete descartado", "reason", "unauthorized_source_ip", "user", authorizedUser.Name, "action_id", payload.ActionID, "source_ip", packetInfo.SourceIP.String())
 			return
 		}
 	}
@@ -329,23 +320,14 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return
 	}
 
-	// LÓGICA DE COOLDOWN CORREGIDA
-	// Por defecto usamos el cooldown global
 	effectiveCooldown := time.Duration(s.config.Security.DefaultActionCooldownSeconds) * time.Second
-	
-	// Si el usuario especificó un valor (no es nil) y es válido (>=0), lo usamos.
-	// Esto cubre el caso de poner '0' explícitamente para desactivar el cooldown,
-	// y respeta el caso de no poner nada (nil) para usar el global.
-	// También mantenemos retrocompatibilidad para quienes usaban -1 para forzar global/anular.
 	if actionDef.CooldownSeconds != nil && *actionDef.CooldownSeconds >= 0 {
 		effectiveCooldown = time.Duration(*actionDef.CooldownSeconds) * time.Second
 	}
 
 	cooldownKey := fmt.Sprintf("%s:%s", authorizedUser.PublicKeyB64, payload.ActionID)
 
-	// 5. Gestión de Cooldowns con Bloqueo Seguro
 	s.cacheMutex.Lock()
-
 	lastExecutionTime, onCooldown := s.actionCooldowns[cooldownKey]
 
 	if effectiveCooldown > 0 && onCooldown {
@@ -353,13 +335,7 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		if elapsed < effectiveCooldown {
 			s.cacheMutex.Unlock()
 			remaining := effectiveCooldown - elapsed
-			slog.Warn(
-				"Acción descartada",
-				"reason", "cooldown_active",
-				"user", authorizedUser.Name,
-				"action_id", payload.ActionID,
-				"remaining_seconds", remaining.Seconds(),
-			)
+			slog.Warn("Acción descartada", "reason", "cooldown_active", "user", authorizedUser.Name, "action_id", payload.ActionID, "remaining_seconds", remaining.Seconds())
 			return
 		}
 	}
@@ -367,15 +343,27 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	s.actionCooldowns[cooldownKey] = time.Now()
 	s.cacheMutex.Unlock()
 
-	slog.Info("Knock válido recibido y autorizado",
-		"user", authorizedUser.Name,
-		"source_ip", packetInfo.SourceIP.String(),
-		"action_id", payload.ActionID,
-	)
+	slog.Info("Knock válido recibido y autorizado", "user", authorizedUser.Name, "source_ip", packetInfo.SourceIP.String(), "action_id", payload.ActionID)
 
-	if err := executor.Execute(actionDef, packetInfo.SourceIP, payload.Params); err != nil {
-		slog.Error("Falló la ejecución de la acción", "action_id", payload.ActionID, "user", authorizedUser.Name, "error", err)
-	}
+	// =========================================================================
+	// FIX CONCURRENCIA: Ejecución Asíncrona con Goroutines
+	// =========================================================================
+	// Envolvemos la llamada al ejecutor en una goroutine para liberar
+	// inmediatamente el bucle principal (main loop). Esto evita que un comando
+	// lento bloquee la recepción de nuevos paquetes UDP.
+	go func(act config.Action, srcIP net.IP, params map[string]string, usrName string, actID string) {
+		// Recovery: Evita que un pánico dentro de executor tumbe todo el demonio.
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("Pánico recuperado en ejecución asíncrona", "reason", r, "action_id", actID)
+			}
+		}()
+
+		// La ejecución ahora ocurre en su propio hilo ligero.
+		if err := executor.Execute(act, srcIP, params); err != nil {
+			slog.Error("Falló la ejecución de la acción", "action_id", actID, "user", usrName, "error", err)
+		}
+	}(actionDef, packetInfo.SourceIP, payload.Params, authorizedUser.Name, payload.ActionID)
 }
 
 func isActionAllowed(action string, allowedActions []string) bool {
