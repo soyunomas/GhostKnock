@@ -333,16 +333,38 @@ actions:
 Esta sección define cómo el demonio "escucha" el tráfico entrante utilizando `libpcap`.
 
 *   **`interface` (Requerido):** El nombre de la interfaz de red física o virtual (ej: `eth0`, `ens33`, `wg0`).
-    *   Valor `any`: Escucha en todas las interfaces disponibles. Útil para desarrollo, pero en producción se recomienda especificar la interfaz pública para reducir la superficie de ataque.
-*   **`port` (Requerido):** El puerto UDP que se monitorizará. GhostKnock **no abre** este puerto (no aparecerá en `netstat -uln` como escuchando activamente en el sentido tradicional del kernel, sino que captura paquetes crudos).
-*   **`listen_ip` (Opcional):** Permite filtrar tráfico destinado a una IP específica dentro de la interfaz. Si se deja vacío (`""`), procesa todo el tráfico UDP del puerto definido.
+*   **`port` (Requerido):** El puerto UDP que se monitorizará.
+*   **`listen_ip` (Opcional):** Permite filtrar tráfico destinado a una IP específica.
 
 ```yaml
 listener:
   interface: "eth0"
-  port: 4000
-  listen_ip: "203.0.113.10"
+  port: 3001
+  listen_ip: ""
 ```
+
+### 🧠 Concepto Técnico Crítico: La "Invisibilidad" y el Firewall
+
+Para que GhostKnock sea indetectable, el puerto elegido (ej. 3001) debe estar **BLOQUEADO (`DROP`)** en el firewall de su sistema operativo.
+
+**¿Por qué funciona esto?**
+El tráfico sigue un flujo bifurcado al llegar a la tarjeta de red:
+
+1.  **Camino A (GhostKnock):** La librería `libpcap` intercepta una **copia** del paquete directamente desde la tarjeta de red. GhostKnock lo analiza, verifica la firma criptográfica y ejecuta la acción si es válida. Esto ocurre independientemente del firewall.
+2.  **Camino B (Kernel/Firewall):** El paquete original sigue su curso hacia el Kernel. Si su firewall (iptables/nftables) está configurado en `DROP`, el paquete se elimina silenciosamente.
+
+**El error de usar ACCEPT:**
+Si usted permite el tráfico (`ACCEPT`), el Kernel buscará un proceso escuchando activamente en ese puerto. Como GhostKnock usa captura pasiva y no un socket estándar, el Kernel no encontrará a nadie y responderá con un mensaje ICMP "Port Unreachable". **Esta respuesta revela al atacante que su servidor existe y está encendido.**
+
+**Configuración Correcta (Iptables):**
+Debe configurar una regla que descarte silenciosamente los paquetes.
+
+```bash
+# ✅ CORRECTO: DROP (Agujero negro, silencio total)
+sudo iptables -A INPUT -p udp --dport 3001 -j DROP
+
+# ❌ INCORRECTO: REJECT (Envía respuesta de rechazo, revela presencia)
+# ❌ INCORRECTO: ACCEPT (Envía error ICMP si no hay socket bind, revela presencia)
 
 ---
 
