@@ -365,6 +365,7 @@ sudo iptables -A INPUT -p udp --dport 3001 -j DROP
 
 # ❌ INCORRECTO: REJECT (Envía respuesta de rechazo, revela presencia)
 # ❌ INCORRECTO: ACCEPT (Envía error ICMP si no hay socket bind, revela presencia)
+```
 
 ---
 
