@@ -255,13 +255,19 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	}
 
 	signature := string(packetInfo.Payload[:ed25519.SignatureSize])
-	
+
+	// FIX RACE CONDITION: Calcular TTL y reservar inmediatamente
+	ttl := time.Duration(s.config.Security.ReplayWindowSeconds+1) * time.Second
+	expiration := time.Now().Add(ttl)
+
 	s.cacheMutex.Lock()
 	if _, exists := s.signaturesCache[signature]; exists {
 		s.cacheMutex.Unlock()
 		slog.Warn("Replay Attack detectado (Pre-Auth)", "source_ip", packetInfo.SourceIP.String())
 		return
 	}
+	// RESERVA: Escribimos antes de validar criptográficamente
+	s.signaturesCache[signature] = expiration
 	s.cacheMutex.Unlock()
 
 	var authorizedUser *config.User
@@ -281,11 +287,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		slog.Warn("Paquete descartado", "reason", "invalid_signature_or_decryption_failed", "source_ip", packetInfo.SourceIP.String())
 		return
 	}
-
-	ttl := time.Duration(s.config.Security.ReplayWindowSeconds+1) * time.Second
-	s.cacheMutex.Lock()
-	s.signaturesCache[signature] = time.Now().Add(ttl)
-	s.cacheMutex.Unlock()
 
 	timestamp := time.Unix(0, payload.Timestamp)
 	age := time.Since(timestamp)
