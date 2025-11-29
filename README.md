@@ -6,7 +6,7 @@
 
 **GhostKnock** es un sistema de **ejecución remota segura, invisible y confidencial**.
 
-Permite disparar comandos predefinidos en un servidor enviando un único paquete UDP. A diferencia del "port knocking" tradicional, GhostKnock no depende de secuencias secretas de puertos, sino de **criptografía de clave pública (Ed25519 para autenticación y X25519 para cifrado)**.
+Permite disparar comandos predefinidos en un servidor enviando un único paquete UDP cifrado.
 
 El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma válida y un payload cifrado para él, lo descifra y ejecuta la acción asociada. Si no, el paquete es ignorado silenciosamente, haciendo que el servidor sea **indetectable** y su comunicación **indescifrable**.
 
