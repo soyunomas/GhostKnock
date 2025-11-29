@@ -17,7 +17,7 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 *   🔐 **Criptografía Fuerte de Doble Capa:**
     *   **Autenticación:** Firmas `Ed25519` para verificar la identidad del remitente.
     *   **Confidencialidad:** Cifrado de extremo a extremo con `X25519` (`nacl/box`) para ocultar la acción y los parámetros, previniendo fugas de información.
-*   🕵️ **Privacidad en Logs:** Capacidad de redactar automáticamente parámetros sensibles (como contraseñas) en los registros del sistema para que nunca se escriban en texto plano en el disco.
+
 *   🧩 **Parámetros Dinámicos:** El cliente puede enviar argumentos (ej. IPs, nombres de servicio) que se inyectan de forma segura en los comandos del servidor.
 *   🛡️ **Seguridad Ofensiva/Defensiva:**
     *   **Invisible:** No abre puertos TCP.
@@ -26,6 +26,8 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
     *   **Anti-DoS:** Verificación criptográfica previa al procesamiento de datos.
 *   ⚡ **Multiplataforma:** Cliente nativo para **Linux** y **Windows**.
 *   ⚙️ **Automatización:** Ideal para tareas de CI/CD, recuperación de desastres y gestión de accesos de emergencia.
+
+*   🕵️ **Privacidad en Logs:** Capacidad de redactar automáticamente parámetros sensibles (como contraseñas) en los registros del sistema para que nunca se escriban en texto plano en el disco.
 
 ---
 
