@@ -136,7 +136,7 @@ ghostknock -host IP_DEL_SERVIDOR \
 
 ---
 
-## 💡 Recetario: 11 Ejemplos Prácticos
+## 💡 Recetario: Ejemplos Prácticos
 
 A continuación se presentan configuraciones para `config.yaml` y el comando del cliente correspondiente.
 
