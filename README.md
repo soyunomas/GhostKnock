@@ -30,8 +30,25 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 *   🧩 **Flexibilidad Operativa:**
     *   **Parámetros Dinámicos:** Permite inyectar argumentos variables (como direcciones IP, nombres de usuarios o IDs de contenedores) dentro de los comandos del servidor de forma segura, gracias a una validación estricta de caracteres.
+
 ---
 
+## ⚠️ Comportamiento de Seguridad y Limitaciones
+
+GhostKnock ha sido diseñado priorizando la **supervivencia del servidor** sobre la disponibilidad. Si el sistema está saturado o detecta anomalías, rechazará peticiones para protegerse.
+
+| Limitación | Escenario del Usuario | Comportamiento | Razón de Seguridad |
+| :--- | :--- | :--- | :--- |
+| **Límite de Procesos (Semáforo)** | Se intentan lanzar más de 10 comandos simultáneos (ej. múltiples backups o updates). | **RECHAZADO.** El servidor ignora el comando y registra un error. No se encola. | **Anti-Fork Bomb.** Evita el agotamiento de la tabla de procesos del sistema operativo. |
+| **Rate Limit (IP)** | Se envían múltiples comandos en menos de 1 segundo desde la misma IP. | **SILENCIO TOTAL.** A partir del 3º paquete en ráfaga, se ignoran. | **Anti-DoS.** Protege CPU y Memoria contra inundaciones. |
+| **Replay Cache** | Se reenvía un paquete idéntico (mismo nonce/firma) dentro de la ventana de tiempo. | **IGNORADO.** | **Anti-Replay.** Evita la reutilización de credenciales interceptadas. |
+| **Buffer de Red** | Ataque DDoS masivo en curso. Usuario legítimo intenta conectar. | **POSIBLE DESCARTE.** Si el buffer de entrada se llena, se descartan los nuevos paquetes. | **Anti-Latencia.** Preferimos descartar a procesar paquetes viejos (bufferbloat). |
+| **Desincronización Reloj** | El reloj del cliente difiere más de 5s del servidor. | **IGNORADO.** El timestamp es inválido. | **Anti-Replay.** Reduce la ventana de oportunidad de ataque. |
+| **Payload Size** | Se intenta enviar un argumento gigante (>1KB). | **SILENCIO TOTAL.** | **Anti-Allocation DoS.** Previene agotamiento de RAM. |
+| **Timeout Forzoso** | Un script ejecutado se cuelga indefinidamente. | **KILL.** El proceso es eliminado tras el tiempo límite (default 30s). | **Recuperación de Recursos.** Libera los slots de ejecución. |
+| **Reinicio Seguro** | Se detiene el servicio (`stop`) mientras hay comandos corriendo. | **ESPERA.** El servicio espera a que terminen los hijos. | **Integridad de Datos.** Evita corromper operaciones críticas. |
+
+---
 
 ## 📦 Instalación
 
