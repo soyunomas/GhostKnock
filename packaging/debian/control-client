@@ -1,5 +1,5 @@
 Package: ghostknock-client
-Version: 1.1.0
+Version: 2.0.0
 Architecture: amd64
 Maintainer: Soyunomas https://github.com/soyunomas/GhostKnock
 Description: Herramientas cliente para GhostKnock.

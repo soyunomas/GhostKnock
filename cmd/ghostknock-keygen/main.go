@@ -13,6 +13,9 @@ import (
 	"path/filepath"
 )
 
+// version se establece en tiempo de compilación usando ldflags.
+var version = "dev"
+
 const (
 	privateKeyPerms = 0600
 	publicKeyPerms  = 0644
@@ -37,10 +40,15 @@ func main() {
 	}
 	defaultPath := filepath.Join(homeDir, ".config", "ghostknock", defaultKeyFile)
 
-	// 2. AÑADIMOS UN FLAG PARA EL ARCHIVO DE SALIDA CON UN NUEVO VALOR POR DEFECTO
-	// El texto de ayuda ahora muestra la ruta por defecto, haciéndola más clara.
+	// 2. AÑADIMOS FLAGS PARA LA LÍNEA DE COMANDOS
+	showVersion := flag.Bool("version", false, "Muestra la versión de la aplicación y sale.")
 	outputFile := flag.String("o", defaultPath, "Ruta base para guardar el par de claves (ej. ~/.ssh/ghostknock_admin)")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("ghostknock-keygen version %s\n", version)
+		os.Exit(0)
+	}
 
 	privateKeyFile := *outputFile
 	publicKeyFile := privateKeyFile + ".pub"

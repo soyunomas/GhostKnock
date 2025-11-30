@@ -10,7 +10,7 @@ import (
 	"net"
 	"os/exec"
 	"os/user"
-	"regexp" // <<-- NUEVA IMPORTACIÓN
+	"regexp"
 	"strconv"
 	"syscall"
 	"text/template"
@@ -20,18 +20,39 @@ import (
 )
 
 // safeParamRegex define la lista blanca de caracteres permitidos en los parámetros.
-// Solo permite letras, números, puntos, guiones bajos y guiones medios.
-// Esto previene inyecciones de comandos (espacios, puntos y coma, pipes, etc.)
-// y navegación de directorios (barras).
-var safeParamRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+var safeParamRegex = regexp.MustCompile(`^[a-zA-Z0-9._][a-zA-Z0-9._-]*$`)
+
+// templateParamRegex encuentra todas las instancias de {{.Params.key}} en una plantilla.
+var templateParamRegex = regexp.MustCompile(`\{\{\.Params\.([a-zA-Z0-9_]+)\}\}`)
+
+// redactParams crea una copia segura de los parámetros, ocultando los sensibles.
+func redactParams(params map[string]string, sensitive []string) map[string]string {
+	if len(sensitive) == 0 {
+		return params
+	}
+	// Copiamos el mapa para no alterar el original
+	safe := make(map[string]string, len(params))
+	for k, v := range params {
+		safe[k] = v
+	}
+
+	// Censuramos los campos sensibles
+	for _, key := range sensitive {
+		if _, exists := safe[key]; exists {
+			safe[key] = "*****"
+		}
+	}
+	return safe
+}
 
 // Execute procesa una acción, valida sus parámetros, la ejecuta y programa su reversión.
-// Ahora acepta un mapa de parámetros sanitizados.
 func Execute(action config.Action, sourceIP net.IP, params map[string]string) error {
-	slog.Debug("Ejecutando acción", "source_ip", sourceIP.String())
+	// Usamos una versión sanitizada de los parámetros para el log de debug
+	safeParams := redactParams(params, action.SensitiveParams)
+	slog.Debug("Ejecutando acción", "source_ip", sourceIP.String(), "params", safeParams)
 
-	// Ejecutar el comando principal pasando los parámetros.
-	if err := runCommand("main", action.Command, action.TimeoutSeconds, action.RunAsUser, sourceIP, params); err != nil {
+	// Ejecutar el comando principal pasando los parámetros
+	if err := runCommand("main", action.Command, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams); err != nil {
 		return fmt.Errorf("falló la ejecución del comando principal: %w", err)
 	}
 
@@ -54,8 +75,8 @@ func scheduleRevert(action config.Action, sourceIP net.IP, params map[string]str
 	time.Sleep(delay)
 
 	slog.Info("Ejecutando reversión", "source_ip", sourceIP.String())
-	// La reversión también recibe los parámetros (ej. para cerrar el puerto a una IP específica enviada como param).
-	if err := runCommand("revert", action.RevertCommand, action.TimeoutSeconds, action.RunAsUser, sourceIP, params); err != nil {
+	// Pasamos también los SensitiveParams a la reversión
+	if err := runCommand("revert", action.RevertCommand, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams); err != nil {
 		slog.Error(
 			"Falló la ejecución del comando de reversión",
 			"source_ip", sourceIP.String(),
@@ -64,22 +85,28 @@ func scheduleRevert(action config.Action, sourceIP net.IP, params map[string]str
 	}
 }
 
-// runCommand es el núcleo de la ejecución segura.
-func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string) error {
+// runCommand es el núcleo de la ejecución segura. Ahora acepta sensitiveParams.
+func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string, sensitiveParams []string) error {
 	// 1. VALIDACIÓN DE SEGURIDAD DE PARÁMETROS (Sanitización Estricta)
-	if len(params) > 0 {
-		for key, value := range params {
-			if !safeParamRegex.MatchString(value) {
-				return fmt.Errorf("SEGURIDAD: El valor del parámetro '%s' contiene caracteres inválidos. Solo se permiten [a-zA-Z0-9._-]", key)
-			}
-			// Validación redundante pero explícita contra path traversal relativo.
-			if value == ".." {
-				return fmt.Errorf("SEGURIDAD: Uso de '..' no permitido en parámetros")
-			}
+	for key, value := range params {
+		if !safeParamRegex.MatchString(value) {
+			return fmt.Errorf("SEGURIDAD: El valor del parámetro '%s' contiene caracteres inválidos o empieza con un guion. Solo se permiten [a-zA-Z0-9._-] y no puede empezar con '-'", key)
+		}
+		if value == ".." {
+			return fmt.Errorf("SEGURIDAD: Uso de '..' no permitido en parámetros")
 		}
 	}
 
-	// 2. PREPARACIÓN DE DATOS PARA LA PLANTILLA
+	// 2. VERIFICAR QUE TODOS LOS PARÁMETROS REQUERIDOS EN LA PLANTILLA ESTÁN PRESENTES
+	requiredParams := templateParamRegex.FindAllStringSubmatch(commandTemplate, -1)
+	for _, match := range requiredParams {
+		paramName := match[1] // El primer grupo de captura es el nombre del parámetro.
+		if _, ok := params[paramName]; !ok {
+			return fmt.Errorf("SEGURIDAD: El comando requiere el parámetro '%s', pero no fue proporcionado por el cliente", paramName)
+		}
+	}
+
+	// 3. PREPARACIÓN DE DATOS PARA LA PLANTILLA
 	templateData := struct {
 		SourceIP string
 		Params   map[string]string
@@ -99,7 +126,6 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	}
 	finalCommand := buf.String()
 
-	// --- LÓGICA DE TIMEOUT CON CONTEXT ---
 	ctx := context.Background()
 	var cancel context.CancelFunc
 	if timeoutSeconds > 0 {
@@ -113,7 +139,6 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// --- LÓGICA DE EJECUCIÓN CON PRIVILEGIOS REDUCIDOS ---
 	if runAsUser != "" {
 		u, err := user.Lookup(runAsUser)
 		if err != nil {
@@ -133,11 +158,17 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
 	}
-	// --------------------------------------------------------
+
+	// --- LÓGICA DE LOGGING SEGURO ---
+	// Si hay parámetros sensibles, NO mostramos el comando final expandido en los logs.
+	logCommandStr := finalCommand
+	if len(sensitiveParams) > 0 {
+		logCommandStr = fmt.Sprintf("[REDACTADO] %s (Valores ocultos por sensitive_params)", commandTemplate)
+	}
 
 	slog.Info("Ejecutando comando en el shell",
 		"type", commandType,
-		"command", finalCommand,
+		"command", logCommandStr, // Usamos la versión segura
 		"timeout_seconds", timeoutSeconds,
 		"run_as_user", runAsUser,
 		"source_ip", sourceIP.String(),
@@ -157,7 +188,7 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 			slog.Warn("Comando terminado por timeout",
 				"type", commandType,
 				"timeout_seconds", timeoutSeconds,
-				"command", finalCommand,
+				"command", logCommandStr, // Log seguro
 			)
 			return fmt.Errorf("el comando excedió el timeout de %d segundos", timeoutSeconds)
 		}

@@ -1,4 +1,4 @@
-# Makefile para el proyecto GhostKnock v1.1.0
+# Makefile para el proyecto GhostKnock v2.0.0
 
 # ==============================================================================
 # Variables de Configuración
@@ -6,6 +6,12 @@
 
 GO ?= go
 GOFLAGS ?= -v
+
+# --- Variables para el empaquetado DEB ---
+VERSION := 2.0.0
+ARCH := $(shell dpkg --print-architecture)
+# Inyectamos la versión en tiempo de compilación para los flags -version
+LDFLAGS_VERSION := -ldflags="-X main.version=$(VERSION)"
 
 # Definición de Binarios
 SERVER_BIN := ghostknockd
@@ -22,9 +28,6 @@ BINDIR := $(PREFIX)/bin
 ETCDIR := /etc/ghostknock
 SYSTEMDDIR := /etc/systemd/system
 
-# --- Variables para el empaquetado DEB ---
-VERSION := 1.1.0
-ARCH := $(shell dpkg --print-architecture)
 BUILD_DIR := _build
 
 # Nombres de paquetes
@@ -53,8 +56,8 @@ build-linux: $(ALL_BINS)
 	@echo "✅ Binarios para Linux compilados."
 
 $(ALL_BINS):
-	@echo "🔨 Compilando $@ (Linux/$(ARCH))..."
-	@$(GO) build $(GOFLAGS) -o $@ ./cmd/$@/
+	@echo "🔨 Compilando $@ (Linux/$(ARCH)) con versión $(VERSION)..."
+	@$(GO) build $(GOFLAGS) $(LDFLAGS_VERSION) -o $@ ./cmd/$@/
 
 # 🪟 Windows (Cross-Compilation)
 # Go permite compilar para Windows desde Linux simplemente configurando GOOS=windows.
@@ -63,8 +66,8 @@ build-windows: $(WINDOWS_BINS)
 
 # Regla de patrón para ejecutables de Windows
 %.exe:
-	@echo "🔨 Compilando $@ (Windows/amd64)..."
-	@GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -o $@ ./cmd/$(basename $@)/
+	@echo "🔨 Compilando $@ (Windows/amd64) con versión $(VERSION)..."
+	@GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) $(LDFLAGS_VERSION) -o $@ ./cmd/$(basename $@)/
 
 # ==============================================================================
 # Reglas de Empaquetado .DEB
