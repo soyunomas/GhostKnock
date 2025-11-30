@@ -83,6 +83,37 @@ make build-windows  # Compila .exe para Windows
 
 ---
 
+## 🧱 Configuración del Firewall (Crucial para Invisibilidad)
+
+Para que GhostKnock sea verdaderamente invisible, **el sistema operativo no debe responder** cuando reciba un paquete en el puerto UDP configurado.
+
+Si no configuras el firewall, tu servidor Linux responderá con un mensaje ICMP "Port Unreachable", revelando a un atacante que el servidor existe y está activo.
+
+Debes configurar tu firewall para **DESCARTAR (DROP/DENY)** explícitamente el tráfico en el puerto de escucha. **GhostKnock seguirá recibiendo los paquetes** porque los captura a bajo nivel (sniffing antes del firewall).
+
+### Si usas UFW (Ubuntu/Debian por defecto)
+Asumiendo que has configurado el puerto `3001` en `config.yaml`:
+
+```bash
+# Denegar explícitamente el tráfico UDP en el puerto 3001
+sudo ufw deny 3001/udp
+sudo ufw reload
+```
+> **Verificación:** Si escaneas el puerto con `nmap -sU -p 3001`, debería aparecer como `open|filtered` (lo ideal) o no responder en absoluto. Nunca debe aparecer como `closed` (que implica respuesta ICMP).
+
+### Si usas iptables puro
+```bash
+# Insertar regla para DESCARTAR paquetes, evitando respuesta ICMP.
+# GhostKnock (libpcap) verá el paquete antes de que iptables lo tire.
+sudo iptables -I INPUT -p udp --dport 3001 -j DROP
+
+# (Opcional) Guardar las reglas para que persistan tras reiniciar
+# sudo netfilter-persistent save  # En Debian/Ubuntu
+# sudo service iptables save      # En CentOS/RHEL
+```
+
+---
+
 ## 🚀 Guía de Inicio Rápido (Protocolo v2 con Cifrado)
 
 ### 1. Generar la Identidad del Servidor (En el Servidor)
