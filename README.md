@@ -14,22 +14,29 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 ## ✨ Características
 
-*   🔐 **Criptografía Fuerte de Doble Capa:**
-    *   **Autenticación:** Firmas `Ed25519` para verificar la identidad del remitente.
-    *   **Confidencialidad:** Cifrado de extremo a extremo con `X25519` (`nacl/box`) para ocultar la acción y los parámetros, previniendo fugas de información.
+* 🔐 **Criptografía Fuerte de Doble Capa:**
+    * **Autenticación:** Firmas `Ed25519` para verificar la identidad del remitente.
+    * **Confidencialidad:** Cifrado de extremo a extremo con `X25519` (`nacl/box`) para ocultar la acción y los parámetros, evitando fugas de información.
 
-*   🧩 **Parámetros Dinámicos:** El cliente puede enviar argumentos (ej. IPs, nombres de servicio) que se inyectan de forma segura en los comandos del servidor.
-*   🛡️ **Seguridad Ofensiva/Defensiva:**
-    *   **Invisible:** No abre puertos TCP.
-    *   **Anti-Replay:** Protección contra ataques de repetición mediante timestamp y caché de firmas.
-    *   **Sanitización Estricta:** Los parámetros entrantes pasan por una lista blanca (`Allowlist`) para prevenir inyección de comandos.
-    *   **Anti-DoS:** Verificación criptográfica previa al procesamiento de datos.
-*   ⚡ **Multiplataforma:** Cliente nativo para **Linux** y **Windows**.
-*   ⚙️ **Automatización:** Ideal para tareas de CI/CD, recuperación de desastres y gestión de accesos de emergencia.
+* 🧩 **Parámetros Dinámicos:**
+    * El cliente puede enviar argumentos (por ejemplo IPs o nombres de servicio) que se inyectan de forma segura en los comandos del servidor.
 
-*   🕵️ **Privacidad en Logs:** Capacidad de redactar automáticamente parámetros sensibles (como contraseñas) en los registros del sistema para que nunca se escriban en texto plano en el disco.
+* 🛡️ **Seguridad Ofensiva/Defensiva**
+    * **Invisible por Diseño:**  
+        No expone puertos TCP ni mantiene sockets abiertos. El servidor opera en modo *listener* pasivo, analizando únicamente el tráfico UDP entrante sin responder a paquetes no válidos. Funciona incluso detrás de firewalls con **todos los puertos cerrados**, sin ser detectable por escáneres de red convencionales.
+    * **Anti-Replay:**  
+        Cada solicitud incluye un *timestamp* y un identificador único. El servidor usa una caché temporal para evitar reutilización maliciosa de paquetes capturados.
+    * **Sanitización Estricta:**  
+        Todos los parámetros se validan mediante una **allowlist**, bloqueando intentos de inyección de comandos.
+    * **Anti-DoS:**  
+        Los paquetes que no superan la verificación criptográfica previa se descartan inmediatamente para reducir el consumo de recursos.
+* ⚡ **Multiplataforma:**  
+    Cliente nativo para **Linux** y **Windows**.
 
+* ⚙️ **Automatización:**  
+    Ideal para tareas de CI/CD, recuperación de desastres y gestión de accesos de emergencia.
 ---
+
 
 ## 📦 Instalación
 
@@ -141,7 +148,7 @@ A continuación se presentan configuraciones para `config.yaml` y el comando del
 > ⚠️ **Nota de Seguridad sobre Parámetros:**
 > Los argumentos pasados con `-args` solo permiten: **Letras (a-Z), Números (0-9), Puntos (.), Guiones bajos (_) y Guiones medios (-)**.
 > Cualquier otro carácter (espacios, :, /, ;) provocará el rechazo del paquete.
-> **¡Nuevo!** Los parámetros no pueden comenzar con un guion (`-`) para evitar inyección de flags.
+> Además, los parámetros no pueden comenzar con un guion (`-`) para evitar inyección de flags.
 
 ### 1. Test de Verificación (Hola Mundo)
 Crea un archivo para verificar que el sistema procesa parámetros correctamente.
