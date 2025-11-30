@@ -14,27 +14,22 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 ## ✨ Características
 
-* 🔐 **Criptografía Fuerte de Doble Capa:**
-    * **Autenticación:** Firmas `Ed25519` para verificar la identidad del remitente.
-    * **Confidencialidad:** Cifrado de extremo a extremo con `X25519` (`nacl/box`) para ocultar la acción y los parámetros, evitando fugas de información.
+*   🛡️ **Invisible por Diseño (Stealth):**
+    *   **Sin Puertos Abiertos:** El servidor no mantiene puertos "a la escucha" en el sentido tradicional. No aparecerá en herramientas de monitorización (como `netstat`) ni responderá a intentos de conexión.
+    *   **Indetectable externamente:** Ante un escaneo de red, el puerto parecerá estar **cerrado** o filtrado. El servidor captura los paquetes de forma pasiva, procesando silenciosamente solo aquellos que son legítimos y descartando el resto sin emitir respuesta.
 
-* 🧩 **Parámetros Dinámicos:**
-    * El cliente puede enviar argumentos (por ejemplo IPs o nombres de servicio) que se inyectan de forma segura en los comandos del servidor.
+*   🚀 **Monitorización Pasiva y Eficiente:**
+    *   **Filtrado en Origen:** A diferencia de un *sniffer* convencional que analiza todo el tráfico, GhostKnock aplica filtros a nivel de sistema operativo (BPF). El kernel solo notifica a la aplicación cuando llega un paquete UDP al puerto exacto, garantizando un consumo de CPU prácticamente nulo incluso en redes con mucho tráfico.
 
-* 🛡️ **Seguridad Ofensiva/Defensiva**
-    * **Invisible por Diseño:**  
-        No expone puertos TCP ni mantiene sockets abiertos. El servidor opera en modo *listener* pasivo, analizando únicamente el tráfico UDP entrante sin responder a paquetes no válidos. Funciona incluso detrás de firewalls con **todos los puertos cerrados**, sin ser detectable por escáneres de red convencionales.
-    * **Anti-Replay:**  
-        Cada solicitud incluye un *timestamp* y un identificador único. El servidor usa una caché temporal para evitar reutilización maliciosa de paquetes capturados.
-    * **Sanitización Estricta:**  
-        Todos los parámetros se validan mediante una **allowlist**, bloqueando intentos de inyección de comandos.
-    * **Anti-DoS:**  
-        Los paquetes que no superan la verificación criptográfica previa se descartan inmediatamente para reducir el consumo de recursos.
-* ⚡ **Multiplataforma:**  
-    Cliente nativo para **Linux** y **Windows**.
+*   🔐 **Seguridad y Privacidad:**
+    *   **Cifrado de Extremo a Extremo:** Utiliza estándares modernos (`Ed25519` + `X25519`) para garantizar dos cosas: que solo tú puedes enviar la orden (autenticación) y que nadie pueda leer qué comando o parámetros estás enviando (confidencialidad).
+    *   **Protección Anti-Replay:** Implementa un mecanismo de "uso único". Si un paquete válido es interceptado y reenviado posteriormente, el servidor lo detectará como duplicado y lo rechazará automáticamente.
 
-* ⚙️ **Automatización:**  
-    Ideal para tareas de CI/CD, recuperación de desastres y gestión de accesos de emergencia.
+*   👮 **Principio de Mínimo Privilegio:**
+    *   Aunque el proceso principal requiere permisos elevados para monitorear la red, tiene la capacidad de **degradar sus privilegios** automáticamente al ejecutar una acción. Puedes configurar comandos para que se ejecuten como usuarios restringidos (ej. `www-data`), limitando el impacto en el sistema.
+
+*   🧩 **Flexibilidad Operativa:**
+    *   **Parámetros Dinámicos:** Permite inyectar argumentos variables (como direcciones IP, nombres de usuarios o IDs de contenedores) dentro de los comandos del servidor de forma segura, gracias a una validación estricta de caracteres.
 ---
 
 
