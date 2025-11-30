@@ -17,6 +17,7 @@ import (
 // Constantes de Seguridad para la captura
 const (
 	// MaxPayloadSize: Límite estricto para el payload UDP.
+	// Evita allocations gigantescas en memoria.
 	MaxPayloadSize = 1024
 
 	// SnapLen: Longitud de captura (Snapshot Length).
@@ -30,14 +31,17 @@ type PacketInfo struct {
 }
 
 // Start inicia la captura de tráfico.
-func Start(ctx context.Context, listenerCfg config.Listener, packetsCh chan<- PacketInfo) {
+// onDrop se ejecuta cuando el canal de procesamiento está lleno (Saturación).
+func Start(ctx context.Context, listenerCfg config.Listener, packetsCh chan<- PacketInfo, onDrop func()) {
 	defer close(packetsCh)
 
-	slog.Info("Iniciando escucha pasiva", "interface", listenerCfg.Interface, "udp_port", listenerCfg.Port)
+	slog.Info("Iniciando escucha pasiva (Non-Blocking Mode)", "interface", listenerCfg.Interface, "udp_port", listenerCfg.Port)
 
 	const pcapTimeout = 300 * time.Millisecond
 
-	handle, err := pcap.OpenLive(listenerCfg.Interface, SnapLen, true, pcapTimeout)
+	// SEGURIDAD: Modo Promiscuo = false
+	// Solo procesamos paquetes destinados a nuestra MAC/IP. Reduce superficie de ataque y CPU.
+	handle, err := pcap.OpenLive(listenerCfg.Interface, SnapLen, false, pcapTimeout)
 	if err != nil {
 		slog.Error("Error al abrir la interfaz de captura", "interface", listenerCfg.Interface, "error", err)
 		os.Exit(1)
@@ -70,12 +74,20 @@ func Start(ctx context.Context, listenerCfg config.Listener, packetsCh chan<- Pa
 				continue
 			}
 
-			// Llamamos a la función pura que valida y extrae
+			// Validamos y extraemos la información
 			if info, ok := extractPacketInfo(packet); ok {
+				// SEGURIDAD: Envío NO BLOQUEANTE.
+				// Si el canal está lleno (Workers saturados), descartamos el paquete inmediatamente.
+				// Esto evita que el listener se cuelgue y provoque un fallo en cascada en la red.
 				select {
 				case packetsCh <- info:
-				case <-ctx.Done():
-					return
+					// Paquete encolado correctamente
+				default:
+					// Canal lleno. Invocamos callback para métricas y continuamos.
+					// NO LOGUEAMOS aquí para evitar DoS por saturación de I/O en disco.
+					if onDrop != nil {
+						onDrop()
+					}
 				}
 			}
 		}
@@ -83,7 +95,6 @@ func Start(ctx context.Context, listenerCfg config.Listener, packetsCh chan<- Pa
 }
 
 // extractPacketInfo contiene la lógica pura de validación.
-// Es pública (o accesible internamente) para facilitar el Fuzzing.
 func extractPacketInfo(packet gopacket.Packet) (PacketInfo, bool) {
 	// 1. Extraer Capa de Red (IP)
 	netLayer := packet.NetworkLayer()
@@ -102,9 +113,6 @@ func extractPacketInfo(packet gopacket.Packet) (PacketInfo, bool) {
 
 	// 3. Validación estricta de tamaño (Hardening)
 	if len(payload) > MaxPayloadSize {
-		// En contexto de Fuzzing o High Load, quizás no queramos loguear cada fallo
-		// para no saturar I/O, pero en producción normal es útil en debug.
-		// Para el Fuzzing, si esto no hace panic, es un éxito.
 		return PacketInfo{}, false
 	}
 

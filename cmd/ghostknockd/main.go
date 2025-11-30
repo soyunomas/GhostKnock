@@ -1,4 +1,4 @@
-// ghostknockd es el demonio del servidor que escucha pasivamente los knocks.
+// ghostknockd es el demonio del servidor blindado que escucha pasivamente los knocks.
 package main
 
 import (
@@ -11,8 +11,10 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,16 +25,26 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// version se establece en tiempo de compilación usando ldflags.
+// version se establece en tiempo de compilación.
 var version = "dev"
 
 const (
+	// Intervalos de limpieza
 	cacheCleanupInterval   = 1 * time.Minute
 	limiterCleanupInterval = 3 * time.Minute
 	limiterEvictionAge     = 5 * time.Minute
 	logFilePath            = "/var/log/ghostknockd.log"
+
+	// SEGURIDAD: Límite estricto de memoria para rastreo de IPs (Anti-OOM)
+	maxLimitersEntries = 20000
+	// SEGURIDAD: Cantidad de entradas a purgar si nos llenamos (10%)
+	evictionBatchSize = 2000
+
+	// SEGURIDAD: Buffer pequeño para forzar "Fail Fast" y evitar latencia (Bufferbloat)
+	packetChannelBuffer = 100
 )
 
+// ipLimiter almacena el estado de rate limit por IP
 type ipLimiter struct {
 	limiter  *rate.Limiter
 	lastSeen time.Time
@@ -41,14 +53,30 @@ type ipLimiter struct {
 type Server struct {
 	config           *config.Config
 	serverPrivateKey ed25519.PrivateKey
-	actionCooldowns  map[string]time.Time
-	signaturesCache  map[string]time.Time
-	cacheMutex       sync.Mutex
-	ipLimiters       map[string]*ipLimiter
-	limitersMutex    sync.Mutex
+
+	// Mapas de estado
+	actionCooldowns map[string]time.Time
+	signaturesCache map[string]time.Time
+
+	// Mutex RW para optimización de lectura en caché (Anti-Replay rápido)
+	cacheMutex sync.RWMutex
+
+	// Gestión de Rate Limit
+	ipLimiters    map[string]*ipLimiter
+	limitersMutex sync.Mutex
+
+	// SEGURIDAD: Semáforo para limitar procesos concurrentes (Anti-ForkBomb)
+	executionSem chan struct{}
+	// SEGURIDAD: WaitGroup para asegurar que los scripts terminen al apagar (Integridad)
+	executionWg sync.WaitGroup
+
+	// VISIBILIDAD: Métricas atómicas (High Performance Counters)
+	droppedPackets   uint64
+	processedPackets uint64
 }
 
 func main() {
+	// 1. Parseo de Flags
 	showVersion := flag.Bool("version", false, "Muestra la versión de la aplicación y sale.")
 	configFile := flag.String("config", "config.yaml", "Ruta al archivo de configuración YAML")
 	testConfig := flag.Bool("t", false, "Prueba la sintaxis del archivo de configuración y sale.")
@@ -70,6 +98,7 @@ func main() {
 		os.Exit(0)
 	}
 
+	// 2. Configuración de Logging
 	tempLogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	cfg, err := config.LoadConfig(*configFile)
 	if err != nil {
@@ -101,8 +130,9 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(logFile, handlerOpts))
 	slog.SetDefault(logger)
 
-	slog.Info("Iniciando demonio GhostKnockd...")
+	slog.Info("Iniciando demonio GhostKnockd (v2.0 Hardened)...")
 
+	// 3. Carga de Claves
 	serverPrivKeyBytes, err := os.ReadFile(cfg.ServerPrivateKeyPath)
 	if err != nil {
 		slog.Error("Error crítico al leer la clave privada del servidor", "path", cfg.ServerPrivateKeyPath, "error", err)
@@ -113,6 +143,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 4. Gestión del PID File
 	if cfg.Daemon.PIDFile != "" {
 		pid := os.Getpid()
 		pidStr := strconv.Itoa(pid)
@@ -120,156 +151,163 @@ func main() {
 			slog.Error("No se pudo escribir el archivo PID", "path", cfg.Daemon.PIDFile, "error", err)
 			os.Exit(1)
 		}
-		slog.Info("Archivo PID creado", "path", cfg.Daemon.PIDFile, "pid", pid)
-
-		defer func() {
-			if err := os.Remove(cfg.Daemon.PIDFile); err != nil {
-				slog.Warn("No se pudo eliminar el archivo PID al salir", "path", cfg.Daemon.PIDFile, "error", err)
-			} else {
-				slog.Info("Archivo PID eliminado", "path", cfg.Daemon.PIDFile)
-			}
-		}()
+		defer os.Remove(cfg.Daemon.PIDFile)
 	}
 
-	slog.Info(
-		"Configuración cargada con éxito",
-		"users_count", len(cfg.Users),
-		"actions_count", len(cfg.Actions),
-		"log_level", cfg.Logging.LogLevel,
-	)
-
+	// 5. Inicialización del Servidor
+	// Limitamos a 10 scripts concurrentes para proteger el OS.
 	server := &Server{
 		config:           cfg,
 		serverPrivateKey: ed25519.PrivateKey(serverPrivKeyBytes),
 		actionCooldowns:  make(map[string]time.Time),
 		signaturesCache:  make(map[string]time.Time),
 		ipLimiters:       make(map[string]*ipLimiter),
+		executionSem:     make(chan struct{}, 10),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// No hacemos defer cancel() aquí porque queremos controlar el orden de apagado manualmente
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Tareas de limpieza en segundo plano
 	go server.startCacheCleaner()
 	go server.startLimiterCleaner()
 
-	packetsCh := make(chan listener.PacketInfo)
-	go listener.Start(ctx, cfg.Listener, packetsCh)
-
-	slog.Info("El listener está activo, procesando knocks y esperando señales...")
-
-mainLoop:
-	for {
-		select {
-		case packetInfo, ok := <-packetsCh:
-			if !ok {
-				slog.Info("El canal del listener se ha cerrado, finalizando.")
-				break mainLoop
+	// --- HEARTBEAT DE MÉTRICAS ---
+	// Reporta estado cada 10s. Evita logs masivos por cada paquete descartado.
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				dropped := atomic.SwapUint64(&server.droppedPackets, 0)
+				processed := atomic.SwapUint64(&server.processedPackets, 0)
+				if dropped > 0 || processed > 0 {
+					slog.Info("Estado del Servidor (10s)",
+						"procesados", processed,
+						"descartados_saturacion", dropped)
+				}
 			}
-			// PROCESAMIENTO: Ahora es seguro llamar a processKnock, ya que
-			// la parte pesada se lanza en una goroutine interna.
-			server.processKnock(packetInfo)
-		case sig := <-signalChan:
-			slog.Info("Señal de apagado recibida", "signal", sig.String())
-			slog.Info("Iniciando cierre controlado...")
-			cancel()
 		}
+	}()
+
+	// --- INICIO DEL LISTENER ---
+	packetsCh := make(chan listener.PacketInfo, packetChannelBuffer)
+
+	// Callback de saturación (High Efficiency Drop)
+	onDrop := func() {
+		atomic.AddUint64(&server.droppedPackets, 1)
 	}
 
-	slog.Info("Demonio GhostKnockd detenido limpiamente.")
+	// Listener asíncrono
+	go listener.Start(ctx, cfg.Listener, packetsCh, onDrop)
+
+	// --- WORKER POOL (Crypto) ---
+	// Desacopla la red de la criptografía. WaitGroup específico para workers.
+	numWorkers := runtime.NumCPU()
+	slog.Info("Iniciando Worker Pool", "workers", numWorkers)
+
+	var workerWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		workerWg.Add(1)
+		go func(workerID int) {
+			defer workerWg.Done()
+			for packet := range packetsCh {
+				server.processKnock(packet)
+			}
+		}(i)
+	}
+
+	slog.Info("Servidor listo y blindado.")
+
+	// 6. APAGADO SEGURO (Graceful Shutdown)
+	sig := <-signalChan
+	slog.Info("Señal recibida, iniciando secuencia de apagado...", "signal", sig.String())
+
+	// Paso A: Detener entrada de nuevos paquetes
+	cancel()
+
+	// Paso B: Esperar a que los workers procesen lo que hay en el buffer
+	slog.Info("Esperando drenaje del buffer de red...")
+	workerWg.Wait()
+
+	// Paso C: Esperar a que los scripts de ejecución (backups, updates) terminen
+	// Esto es CRÍTICO para la integridad de datos.
+	slog.Info("Esperando finalización de procesos activos...")
+	server.executionWg.Wait()
+
+	slog.Info("Apagado seguro completado.")
 }
 
+// getLimiter implementa Rate Limiting con "Purga Parcial" (Anti-OOM + Anti-Evasión)
 func (s *Server) getLimiter(ip net.IP) *rate.Limiter {
 	s.limitersMutex.Lock()
 	defer s.limitersMutex.Unlock()
+
 	ipStr := ip.String()
-	limiter, exists := s.ipLimiters[ipStr]
-	if !exists {
-		newLimiter := rate.NewLimiter(rate.Limit(s.config.Security.RateLimitPerSecond), s.config.Security.RateLimitBurst)
-		s.ipLimiters[ipStr] = &ipLimiter{limiter: newLimiter, lastSeen: time.Now()}
-		return newLimiter
-	}
-	limiter.lastSeen = time.Now()
-	return limiter.limiter
-}
 
-func (s *Server) startLimiterCleaner() {
-	ticker := time.NewTicker(limiterCleanupInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		s.limitersMutex.Lock()
-		purgedCount := 0
-		for ip, limiterInfo := range s.ipLimiters {
-			if time.Since(limiterInfo.lastSeen) > limiterEvictionAge {
-				delete(s.ipLimiters, ip)
-				purgedCount++
+	// Fast Path: Ya existe
+	if entry, exists := s.ipLimiters[ipStr]; exists {
+		entry.lastSeen = time.Now()
+		return entry.limiter
+	}
+
+	// Protección de Memoria: Si estamos llenos, purgar parcialmente.
+	if len(s.ipLimiters) >= maxLimitersEntries {
+		deleted := 0
+		// Iteración de mapas en Go es pseudo-aleatoria, perfecta para purga muestral.
+		for k := range s.ipLimiters {
+			delete(s.ipLimiters, k)
+			deleted++
+			if deleted >= evictionBatchSize {
+				break
 			}
 		}
-		s.limitersMutex.Unlock()
-		if purgedCount > 0 {
-			slog.Debug("Limpiados limitadores de IP inactivos", "count", purgedCount)
-		}
+		slog.Warn("Tabla de IPs llena: purga parcial ejecutada", "purgados", deleted)
 	}
+
+	// Crear nuevo limitador
+	newLimiter := rate.NewLimiter(rate.Limit(s.config.Security.RateLimitPerSecond), s.config.Security.RateLimitBurst)
+	s.ipLimiters[ipStr] = &ipLimiter{limiter: newLimiter, lastSeen: time.Now()}
+	return newLimiter
 }
 
-func (s *Server) startCacheCleaner() {
-	ticker := time.NewTicker(cacheCleanupInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		s.cacheMutex.Lock()
-
-		expirationDuration := time.Duration(s.config.Security.DefaultActionCooldownSeconds*2) * time.Second
-		purgedCount := 0
-		for key, lastSeen := range s.actionCooldowns {
-			if time.Since(lastSeen) > expirationDuration {
-				delete(s.actionCooldowns, key)
-				purgedCount++
-			}
-		}
-
-		now := time.Now()
-		for sig, expiration := range s.signaturesCache {
-			if now.After(expiration) {
-				delete(s.signaturesCache, sig)
-			}
-		}
-
-		s.cacheMutex.Unlock()
-		if purgedCount > 0 {
-			slog.Debug("Limpiadas entradas de cooldown antiguas", "count", purgedCount)
-		}
-	}
-}
-
+// processKnock maneja la lógica de negocio con doble verificación y control de concurrencia.
 func (s *Server) processKnock(packetInfo listener.PacketInfo) {
+	atomic.AddUint64(&s.processedPackets, 1)
+
+	// 1. Rate Limit IP (Anti-DoS ligero)
 	limiter := s.getLimiter(packetInfo.SourceIP)
 	if !limiter.Allow() {
-		slog.Warn("Paquete descartado", "reason", "rate_limit_exceeded", "source_ip", packetInfo.SourceIP.String())
-		return
+		return // Descarte silencioso
 	}
 
+	// 2. Validación estructural básica
 	if len(packetInfo.Payload) < ed25519.SignatureSize {
 		return
 	}
 
-	signature := string(packetInfo.Payload[:ed25519.SignatureSize])
+	// Slice sin copia (Memory Optimization)
+	sigBytes := packetInfo.Payload[:ed25519.SignatureSize]
 
-	// FIX RACE CONDITION: Calcular TTL y reservar inmediatamente
-	ttl := time.Duration(s.config.Security.ReplayWindowSeconds+1) * time.Second
-	expiration := time.Now().Add(ttl)
+	// 3. CACHÉ CHECK 1 (Read Lock - Barato)
+	// Protege CPU contra ataques de Replay Masivo.
+	s.cacheMutex.RLock()
+	// El compilador de Go optimiza string(bytes) en map lookups para NO alocar memoria.
+	_, known := s.signaturesCache[string(sigBytes)]
+	s.cacheMutex.RUnlock()
 
-	s.cacheMutex.Lock()
-	if _, exists := s.signaturesCache[signature]; exists {
-		s.cacheMutex.Unlock()
-		slog.Warn("Replay Attack detectado (Pre-Auth)", "source_ip", packetInfo.SourceIP.String())
+	if known {
+		slog.Debug("Replay detectado (Fast-Path)", "src", packetInfo.SourceIP)
 		return
 	}
-	// RESERVA: Escribimos antes de validar criptográficamente
-	s.signaturesCache[signature] = expiration
-	s.cacheMutex.Unlock()
 
+	// 4. VALIDACIÓN CRIPTOGRÁFICA (CPU Intensivo)
 	var authorizedUser *config.User
 	var payload *protocol.Payload
 	var err error
@@ -284,41 +322,107 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	}
 
 	if authorizedUser == nil {
-		slog.Warn("Paquete descartado", "reason", "invalid_signature_or_decryption_failed", "source_ip", packetInfo.SourceIP.String())
+		return // Firma inválida o basura
+	}
+
+	// 5. CACHÉ CHECK 2 + STORE (Write Lock - Atómico)
+	// Evita Race Conditions si dos workers procesan el mismo paquete válido a la vez.
+	ttl := time.Duration(s.config.Security.ReplayWindowSeconds+1) * time.Second
+	expiration := time.Now().Add(ttl)
+
+	s.cacheMutex.Lock()
+	if _, exists := s.signaturesCache[string(sigBytes)]; exists {
+		s.cacheMutex.Unlock()
+		slog.Warn("Replay detectado (Race-Win)", "user", authorizedUser.Name)
+		return
+	}
+	// Solo ahora alocamos memoria para la key (string)
+	s.signaturesCache[string(sigBytes)] = expiration
+	s.cacheMutex.Unlock()
+
+	// 6. Validación Timestamp del Payload
+	ts := time.Unix(0, payload.Timestamp)
+	if time.Since(ts) > time.Duration(s.config.Security.ReplayWindowSeconds)*time.Second {
+		slog.Warn("Paquete expirado (Timestamp fuera de ventana)", "user", authorizedUser.Name)
 		return
 	}
 
-	timestamp := time.Unix(0, payload.Timestamp)
-	age := time.Since(timestamp)
-	replayWindow := time.Duration(s.config.Security.ReplayWindowSeconds) * time.Second
-	if age < 0 || age > replayWindow {
-		slog.Warn("Paquete descartado", "reason", "outside_replay_window", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "age_seconds", age.Seconds())
+	// 7. Autorización de Acción y Cooldowns
+	// Pasamos la SourceIP para validar CIDRs
+	if !s.checkActionAuthAndCooldown(authorizedUser, payload, packetInfo.SourceIP) {
 		return
 	}
 
-	if !isActionAllowed(payload.ActionID, authorizedUser.AllowedActions) {
-		slog.Warn("Paquete descartado", "reason", "unauthorized_action", "source_ip", packetInfo.SourceIP.String(), "user", authorizedUser.Name, "action_id", payload.ActionID)
-		return
+	slog.Info("Knock autorizado, solicitando slot de ejecución", "user", authorizedUser.Name, "action", payload.ActionID)
+
+	// 8. EJECUCIÓN SEGURA (Anti-ForkBomb + Anti-Parking)
+	// Usamos select con default para NO bloquear al worker si el semáforo está lleno.
+	select {
+	case s.executionSem <- struct{}{}:
+		// Slot adquirido. Registramos en WaitGroup para apagado seguro.
+		s.executionWg.Add(1)
+
+		go func() {
+			defer func() {
+				<-s.executionSem     // Liberar slot del semáforo
+				s.executionWg.Done() // Notificar al WaitGroup
+				if r := recover(); r != nil {
+					slog.Error("Panic recuperado en executor", "err", r)
+				}
+			}()
+
+			actionDef := s.config.Actions[payload.ActionID]
+
+			// DEFENSA EN PROFUNDIDAD: Forzar timeout de seguridad si no existe
+			if actionDef.TimeoutSeconds <= 0 {
+				actionDef.TimeoutSeconds = 30
+			}
+
+			if err := executor.Execute(actionDef, packetInfo.SourceIP, payload.Params); err != nil {
+				slog.Error("Error en ejecución", "action", payload.ActionID, "error", err)
+			}
+		}()
+	default:
+		// Rechazo explícito por saturación de procesos.
+		// Protege al servidor de colapsar por exceso de forks.
+		slog.Error("Ejecución rechazada: Límite de procesos concurrentes alcanzado", "user", authorizedUser.Name)
+	}
+}
+
+// checkActionAuthAndCooldown verifica permisos, IPs y tiempos de enfriamiento.
+func (s *Server) checkActionAuthAndCooldown(user *config.User, payload *protocol.Payload, sourceIP net.IP) bool {
+	// Verificar permisos
+	allowed := false
+	for _, a := range user.AllowedActions {
+		if a == payload.ActionID {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		slog.Warn("Acción no autorizada para este usuario", "user", user.Name, "action", payload.ActionID)
+		return false
 	}
 
-	if len(authorizedUser.SourceCIDRs) > 0 {
-		isIPAllowed := false
-		for _, cidr := range authorizedUser.SourceCIDRs {
-			if cidr.Contains(packetInfo.SourceIP) {
-				isIPAllowed = true
+	// Verificar IP source (CIDR)
+	if len(user.SourceCIDRs) > 0 {
+		ipAllowed := false
+		for _, subnet := range user.SourceCIDRs {
+			if subnet.Contains(sourceIP) {
+				ipAllowed = true
 				break
 			}
 		}
-		if !isIPAllowed {
-			slog.Warn("Paquete descartado", "reason", "unauthorized_source_ip", "user", authorizedUser.Name, "action_id", payload.ActionID, "source_ip", packetInfo.SourceIP.String())
-			return
+		if !ipAllowed {
+			slog.Warn("IP de origen no autorizada para este usuario", "user", user.Name, "ip", sourceIP.String())
+			return false
 		}
 	}
 
+	// Verificar Cooldowns
 	actionDef, ok := s.config.Actions[payload.ActionID]
 	if !ok {
-		slog.Error("Inconsistencia de configuración: la acción autorizada no existe", "action_id", payload.ActionID)
-		return
+		return false
 	}
 
 	effectiveCooldown := time.Duration(s.config.Security.DefaultActionCooldownSeconds) * time.Second
@@ -326,52 +430,59 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		effectiveCooldown = time.Duration(*actionDef.CooldownSeconds) * time.Second
 	}
 
-	cooldownKey := fmt.Sprintf("%s:%s", authorizedUser.PublicKeyB64, payload.ActionID)
+	cooldownKey := fmt.Sprintf("%s:%s", user.PublicKeyB64, payload.ActionID)
 
 	s.cacheMutex.Lock()
-	lastExecutionTime, onCooldown := s.actionCooldowns[cooldownKey]
+	defer s.cacheMutex.Unlock()
 
-	if effectiveCooldown > 0 && onCooldown {
-		elapsed := time.Since(lastExecutionTime)
-		if elapsed < effectiveCooldown {
-			s.cacheMutex.Unlock()
-			remaining := effectiveCooldown - elapsed
-			slog.Warn("Acción descartada", "reason", "cooldown_active", "user", authorizedUser.Name, "action_id", payload.ActionID, "remaining_seconds", remaining.Seconds())
-			return
+	if last, exists := s.actionCooldowns[cooldownKey]; exists {
+		if time.Since(last) < effectiveCooldown {
+			slog.Debug("Cooldown activo", "user", user.Name, "action", payload.ActionID)
+			return false
 		}
 	}
-
 	s.actionCooldowns[cooldownKey] = time.Now()
-	s.cacheMutex.Unlock()
-
-	slog.Info("Knock válido recibido y autorizado", "user", authorizedUser.Name, "source_ip", packetInfo.SourceIP.String(), "action_id", payload.ActionID)
-
-	// =========================================================================
-	// FIX CONCURRENCIA: Ejecución Asíncrona con Goroutines
-	// =========================================================================
-	// Envolvemos la llamada al ejecutor en una goroutine para liberar
-	// inmediatamente el bucle principal (main loop). Esto evita que un comando
-	// lento bloquee la recepción de nuevos paquetes UDP.
-	go func(act config.Action, srcIP net.IP, params map[string]string, usrName string, actID string) {
-		// Recovery: Evita que un pánico dentro de executor tumbe todo el demonio.
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("Pánico recuperado en ejecución asíncrona", "reason", r, "action_id", actID)
-			}
-		}()
-
-		// La ejecución ahora ocurre en su propio hilo ligero.
-		if err := executor.Execute(act, srcIP, params); err != nil {
-			slog.Error("Falló la ejecución de la acción", "action_id", actID, "user", usrName, "error", err)
-		}
-	}(actionDef, packetInfo.SourceIP, payload.Params, authorizedUser.Name, payload.ActionID)
+	return true
 }
 
-func isActionAllowed(action string, allowedActions []string) bool {
-	for _, a := range allowedActions {
-		if a == action {
-			return true
+func (s *Server) startLimiterCleaner() {
+	ticker := time.NewTicker(limiterCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.limitersMutex.Lock()
+		purged := 0
+		for ip, info := range s.ipLimiters {
+			if time.Since(info.lastSeen) > limiterEvictionAge {
+				delete(s.ipLimiters, ip)
+				purged++
+			}
+		}
+		s.limitersMutex.Unlock()
+		if purged > 0 {
+			slog.Debug("Limpieza rutinaria de IPs inactivas", "count", purged)
 		}
 	}
-	return false
+}
+
+func (s *Server) startCacheCleaner() {
+	ticker := time.NewTicker(cacheCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.cacheMutex.Lock()
+		// Limpieza de firmas (Anti-Replay)
+		now := time.Now()
+		for sig, exp := range s.signaturesCache {
+			if now.After(exp) {
+				delete(s.signaturesCache, sig)
+			}
+		}
+		// Limpieza de cooldowns
+		// Aumentamos a 24h para no borrar cooldowns largos (ej. 2h) prematuramente.
+		for key, t := range s.actionCooldowns {
+			if time.Since(t) > 24*time.Hour {
+				delete(s.actionCooldowns, key)
+			}
+		}
+		s.cacheMutex.Unlock()
+	}
 }
