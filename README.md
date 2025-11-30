@@ -188,10 +188,15 @@ ghostknock -host IP_DEL_SERVIDOR \
 
 A continuación se presentan configuraciones para `config.yaml` y el comando del cliente correspondiente.
 
+> ⚠️ **IMPORTANTE: Gestión de Timeouts y Corrupción de Datos**
+> Por defecto, GhostKnock mata (`SIGKILL`) cualquier comando que tarde más de **30 segundos** para liberar recursos.
+>
+> Para tareas críticas como **actualizaciones de sistema (`apt`), backups o despliegues**, DEBES aumentar el valor de `timeout_seconds` explícitamente. Si el proceso se mata a la mitad, podrías dejar bloqueos de archivos (locks) huérfanos o bases de datos corruptas.
+>
+> **Regla de Oro:** Calcula el tiempo máximo que tarda tu comando en el peor escenario y multiplícalo por 2.
+
 > ⚠️ **Nota de Seguridad sobre Parámetros:**
 > Los argumentos pasados con `-args` solo permiten: **Letras (a-Z), Números (0-9), Puntos (.), Guiones bajos (_) y Guiones medios (-)**.
-> Cualquier otro carácter (espacios, :, /, ;) provocará el rechazo del paquete.
-> Además, los parámetros no pueden comenzar con un guion (`-`) para evitar inyección de flags.
 
 ### 1. Test de Verificación (Hola Mundo)
 Crea un archivo para verificar que el sistema procesa parámetros correctamente.
@@ -229,7 +234,8 @@ Reinicia un servicio pasando su nombre como parámetro.
     ```yaml
     "restart-svc":
       command: "systemctl restart {{.Params.name}}"
-      timeout_seconds: 10
+      # Aumentado a 20s para servicios lentos al arrancar
+      timeout_seconds: 20
     ```
 *   **Cliente:**
     ```bash
@@ -257,6 +263,8 @@ Actualiza el código de una aplicación web para una rama concreta.
     "deploy-app":
       run_as_user: "www-data"
       command: "cd /var/www/html && git fetch && git checkout {{.Params.branch}} && git pull"
+      # Aumentado a 300s (5 min) por si la red es lenta o hay post-hooks pesados
+      timeout_seconds: 300
     ```
 *   **Cliente:**
     ```bash
@@ -270,6 +278,8 @@ Reinicia un contenedor Docker específico.
     ```yaml
     "docker-bounce":
       command: "docker restart {{.Params.container}}"
+      # Docker puede tardar en detener un contenedor gracefuly
+      timeout_seconds: 60
     ```
 *   **Cliente:**
     ```bash
@@ -303,13 +313,15 @@ Enciende una máquina de la red interna.
     ```
 
 ### 9. Actualización del Sistema
-Lanza una actualización de paquetes del sistema operativo.
+Lanza una actualización de paquetes del sistema operativo. **¡CUIDADO CON EL TIMEOUT!**
 
 *   **Config (Server):**
     ```yaml
     "sys-update":
+      # Usar siempre -y para evitar que el comando espere input
       command: "apt-get update && apt-get upgrade -y"
-      timeout_seconds: 600
+      # IMPRESCINDIBLE: 20 minutos. Si se corta antes, 'dpkg' quedará bloqueado.
+      timeout_seconds: 1200
       cooldown_seconds: 3600
     ```
 *   **Cliente:**
