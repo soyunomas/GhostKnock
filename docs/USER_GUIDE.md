@@ -29,6 +29,7 @@
 ### 6. Uso del Cliente CLI (ghostknock)
 *   [6.1. Sintaxis y Flags](#61-sintaxis-y-flags)
 *   [6.2. Contexto Criptográfico Obligatorio](#62-contexto-criptográfico-obligatorio)
+*   [6.3. Tip: Simplificación con Alias](#63-tip-pro-simplificación-con-alias)
 
 ### 7. Recetario de Operaciones (Use Cases)
 *   [7.1. Gestión de Accesos (SSH/VPN)](#71-gestión-de-accesos-sshvpn)
@@ -288,6 +289,51 @@ ghostknock -host 192.168.1.50 \
            -action status-check
 ```
 
+---
+
+## 6.3. Tip: Simplificación con Alias
+
+El comando completo puede resultar largo de escribir repetidamente. Se recomienda configurar atajos para fijar los parámetros estáticos (IP y Claves).
+
+### A. En Linux / macOS (Bash o Zsh)
+Edita tu archivo de configuración (`~/.bashrc` o `~/.zshrc`) y añade:
+
+```bash
+# Define el alias fijando el Host y la Clave Pública
+alias gk='ghostknock -host 192.168.1.50 -server-pubkey ~/.config/ghostknock/server.pub'
+```
+*Recarga la configuración con `source ~/.bashrc`.*
+
+### B. En Windows (PowerShell)
+Edita tu perfil de PowerShell (ejecuta `notepad $PROFILE` para abrirlo) y añade una función wrapper:
+
+```powershell
+function gk {
+    # Ajusta las rutas a tu caso real
+    $exePath = "C:\Tools\ghostknock.exe"
+    $pubKey  = "$env:USERPROFILE\.config\ghostknock\server.pub"
+    $target  = "192.168.1.50"
+
+    # Pasa todos los argumentos extra (@args) al comando
+    & $exePath -host $target -server-pubkey $pubKey @args
+}
+```
+*Reinicia la terminal de PowerShell para aplicar.*
+
+### Ejemplos de Uso (Con Alias)
+Una vez configurado, el uso se simplifica drásticamente:
+
+**Ejemplo 1: Acción simple**
+```bash
+# Antes: ghostknock -host ... -server-pubkey ... -action open-ssh
+gk -action open-ssh
+```
+
+**Ejemplo 2: Acción con argumentos**
+```bash
+# Antes: ghostknock -host ... -server-pubkey ... -action ban-ip -args "target=1.2.3.4"
+gk -action ban-ip -args "target=10.0.0.5"
+```
 ---
 
 # 7. Recetario de Operaciones (Use Cases)
