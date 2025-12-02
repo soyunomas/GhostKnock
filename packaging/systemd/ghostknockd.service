@@ -2,7 +2,7 @@
 #
 # Este archivo define cómo Systemd debe gestionar el demonio GhostKnockd.
 # Creado por 'make install', gestiona el servicio con:
-# systemctl start|stop|restart|status|enable|disable ghostknockd
+# systemctl start|stop|restart|status|enable|disable|reload ghostknockd
 
 [Unit]
 Description=GhostKnockd - Secure Port Knocking Daemon
@@ -23,8 +23,11 @@ Group=root
 ExecStart=/usr/local/bin/ghostknockd -config /etc/ghostknock/config.yaml
 
 # Le decimos a Systemd dónde encontrar nuestro archivo PID.
-# Esto mejora la gestión del proceso.
 PIDFile=/var/run/ghostknockd.pid
+
+# COMANDO DE RECARGA (Hot-Reload)
+# Envía la señal SIGHUP al proceso principal para recargar la configuración.
+ExecReload=/bin/kill -HUP $MAINPID
 
 # Política de reinicio: si el proceso falla (código de salida no cero),
 # Systemd lo reiniciará automáticamente.
