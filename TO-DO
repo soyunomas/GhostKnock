@@ -1,0 +1,315 @@
+Entendido. Tienes toda la razón, si esto es para dárselo a un desarrollador, tiene que ser un documento autocontenido y exhaustivo. Aquí tienes la **Hoja de Ruta Técnica Completa y Definitiva** para implementar Hooks Globales, por Acción y de Reversión en GhostKnock.
+
+---
+
+# Hoja de Ruta Técnica: Implementación de Sistema de Hooks (v2.2)
+
+## Objetivo
+Implementar un sistema de ejecución de scripts externos (Hooks) en puntos clave del ciclo de vida de GhostKnock:
+1.  **Pre-Ejecución:** Validación o preparación antes del comando principal.
+2.  **Post-Ejecución (Success/Error):** Notificación y auditoría tras el comando principal.
+3.  **Reversión (Revert):** Notificación y control tras el comando de limpieza diferido.
+
+El sistema debe inyectar el contexto de la ejecución (`User`, `IP`, `Action`, `Status`) como **Variables de Entorno** a los scripts.
+
+---
+
+## Fase 1: Modificación de la Configuración (`internal/config`)
+
+Debemos actualizar las estructuras Go para soportar las nuevas directivas en `config.yaml`.
+
+**1. Archivo `internal/config/config.go`**
+
+*   Definir la nueva estructura `Hooks` para configuración global:
+    ```go
+    type Hooks struct {
+        // Se ejecuta ANTES de la acción. Si exit code != 0, cancela la ejecución.
+        PreExecute  string `yaml:"pre_execute"`
+        
+        // Se ejecuta INMEDIATAMENTE DESPUÉS de que el comando principal termine con éxito (exit 0).
+        OnSuccess   string `yaml:"on_success"`
+        
+        // Se ejecuta si el comando principal falla o hace timeout.
+        OnError     string `yaml:"on_error"`
+        
+        // Se ejecuta DESPUÉS de que termine el comando de reversión (revert_command).
+        OnRevert    string `yaml:"on_revert"`
+    }
+    ```
+
+*   Actualizar la estructura `Config` (Raíz) para incluir los hooks globales:
+    ```go
+    type Config struct {
+        // ... campos existentes ...
+        GlobalHooks Hooks `yaml:"hooks"` // Nueva sección
+    }
+    ```
+
+*   Actualizar la estructura `Action` para incluir los hooks específicos:
+    ```go
+    type Action struct {
+        // ... campos existentes ...
+        
+        // Hook específico previo a esta acción
+        PreHook    string `yaml:"pre_hook"`
+        
+        // Hook específico posterior a esta acción
+        PostHook   string `yaml:"post_hook"`
+        
+        // Hook específico tras la reversión de esta acción
+        RevertHook string `yaml:"revert_hook"`
+    }
+    ```
+
+---
+
+## Fase 2: Lógica de Ejecución de Hooks (`internal/executor`)
+
+Crear un manejador centralizado para ejecutar los scripts inyectando el entorno.
+
+**1. Crear archivo `internal/executor/hooks.go`**
+
+Este archivo debe contener la lógica para lanzar el proceso hijo.
+
+*   Definir estructura de contexto:
+    ```go
+    type HookContext struct {
+        User      string
+        ActionID  string
+        SourceIP  string
+        Stage     string // "global_pre", "action_post", "global_revert", etc.
+        Status    string // "success", "error"
+        ErrorMsg  string // Detalle del error si Status == "error"
+        Params    map[string]string // Parámetros crudos del knock
+    }
+    ```
+
+*   Implementar función `RunHook`:
+    ```go
+    func RunHook(scriptPath string, ctx HookContext) error {
+        if scriptPath == "" {
+            return nil
+        }
+
+        // Timeout de seguridad: 5 segundos. Un hook no debe colgar el sistema.
+        ctxt, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+
+        cmd := exec.CommandContext(ctxt, scriptPath)
+
+        // HERENCIA DE ENTORNO + INYECCIÓN
+        cmd.Env = os.Environ()
+        cmd.Env = append(cmd.Env,
+            "GK_USER=" + ctx.User,
+            "GK_ACTION=" + ctx.ActionID,
+            "GK_IP=" + ctx.SourceIP,
+            "GK_STAGE=" + ctx.Stage,
+            "GK_STATUS=" + ctx.Status,
+            "GK_ERROR_MSG=" + ctx.ErrorMsg,
+        )
+
+        // Inyectar también los Params del usuario como GK_PARAM_key=val
+        for k, v := range ctx.Params {
+            safeKey := "GK_PARAM_" + strings.ToUpper(k)
+            cmd.Env = append(cmd.Env, safeKey+"="+v)
+        }
+
+        // Capturar salida para debug
+        output, err := cmd.CombinedOutput()
+        if err != nil {
+            slog.Error("Hook failed", "script", scriptPath, "error", err, "output", string(output))
+            return err
+        }
+        
+        return nil
+    }
+    ```
+
+---
+
+## Fase 3: Integración en el Ciclo de Vida (`internal/executor/executor.go`)
+
+Modificar la función `Execute` para intercalar las llamadas a `RunHook`.
+
+**1. Actualizar firmas de función:**
+La función `Execute` ahora necesita conocer los Hooks Globales y el nombre del Usuario (que antes no necesitaba).
+
+```go
+func Execute(
+    action config.Action, 
+    user string,            // NUEVO
+    sourceIP net.IP, 
+    params map[string]string, 
+    globalHooks config.Hooks // NUEVO
+) error
+```
+
+**2. Implementar Flujo en `Execute`:**
+
+```go
+func Execute(...) error {
+    // Contexto base para hooks
+    hCtx := HookContext{User: user, ActionID: "...", SourceIP: sourceIP.String(), Params: params}
+
+    // A. GLOBAL PRE-HOOK
+    hCtx.Stage = "global_pre"
+    if err := RunHook(globalHooks.PreExecute, hCtx); err != nil {
+        return fmt.Errorf("Action cancelled by Global Pre-Hook")
+    }
+
+    // B. ACTION PRE-HOOK
+    hCtx.Stage = "action_pre"
+    if err := RunHook(action.PreHook, hCtx); err != nil {
+        return fmt.Errorf("Action cancelled by Action Pre-Hook")
+    }
+
+    // C. EJECUCIÓN DEL COMANDO PRINCIPAL
+    cmdErr := runCommand(...) 
+
+    // D. DETERMINAR ESTADO POST-EJECUCIÓN
+    status := "success"
+    errMsg := ""
+    if cmdErr != nil {
+        status = "error"
+        errMsg = cmdErr.Error()
+    }
+    hCtx.Status = status
+    hCtx.ErrorMsg = errMsg
+
+    // E. ACTION POST-HOOK (Fuego y olvido)
+    hCtx.Stage = "action_post"
+    go RunHook(action.PostHook, hCtx)
+
+    // F. GLOBAL POST-HOOK (Router)
+    if status == "success" {
+        hCtx.Stage = "global_success"
+        go RunHook(globalHooks.OnSuccess, hCtx)
+    } else {
+        hCtx.Stage = "global_error"
+        go RunHook(globalHooks.OnError, hCtx)
+    }
+
+    // G. PROGRAMAR REVERSIÓN (Si aplica)
+    if action.RevertCommand != "" {
+        // Pasamos globalHooks también a la reversión
+        go scheduleRevert(action, user, sourceIP, params, globalHooks)
+    }
+
+    return cmdErr
+}
+```
+
+---
+
+## Fase 4: Integración en la Reversión (`internal/executor/executor.go`)
+
+La función `scheduleRevert` también debe actualizarse para lanzar hooks.
+
+**1. Actualizar `scheduleRevert`:**
+
+```go
+func scheduleRevert(
+    action config.Action, 
+    user string,             // NUEVO
+    sourceIP net.IP, 
+    params map[string]string, 
+    globalHooks config.Hooks // NUEVO
+) {
+    // 1. Espera
+    time.Sleep(time.Duration(action.RevertDelaySeconds) * time.Second)
+
+    // 2. Ejecutar Reversión
+    err := runCommand("revert", action.RevertCommand, ...)
+
+    // 3. Preparar Contexto de Hook
+    status := "success"
+    errMsg := ""
+    if err != nil {
+        status = "error"
+        errMsg = err.Error()
+    }
+
+    hCtx := HookContext{
+        User: user, ActionID: "...", SourceIP: sourceIP.String(), 
+        Params: params, Status: status, ErrorMsg: errMsg,
+    }
+
+    // 4. ACTION REVERT HOOK
+    if action.RevertHook != "" {
+        hCtx.Stage = "action_revert"
+        RunHook(action.RevertHook, hCtx)
+    }
+
+    // 5. GLOBAL REVERT HOOK
+    if globalHooks.OnRevert != "" {
+        hCtx.Stage = "global_revert"
+        RunHook(globalHooks.OnRevert, hCtx)
+    }
+}
+```
+
+---
+
+## Fase 5: Modificación en el llamante (`ghostknockd/main.go`)
+
+En el archivo principal del servidor, donde se llama a `executor.Execute`, debemos pasar los nuevos parámetros.
+
+*   **Antes:** `executor.Execute(actionDef, packetInfo.SourceIP, payload.Params)`
+*   **Ahora:** `executor.Execute(actionDef, authorizedUser.Name, packetInfo.SourceIP, payload.Params, currentConfig.GlobalHooks)`
+
+---
+
+## Ejemplo de Script Router (`router.sh`)
+
+Este script sirve de referencia para validar la implementación. Debe manejar todos los estados posibles.
+
+```bash
+#!/bin/bash
+# /usr/local/bin/router_notificaciones.sh
+# Script centralizado para manejar eventos de GhostKnock
+
+# Variables disponibles:
+# GK_USER, GK_ACTION, GK_IP, GK_STAGE, GK_STATUS, GK_ERROR_MSG
+
+# ==============================================================================
+# 1. ETAPA PREVIA (Control de Acceso)
+# ==============================================================================
+if [ "$GK_STAGE" == "global_pre" ]; then
+    # Ejemplo: Bloquear ejecuciones fuera de horario laboral (8am - 8pm)
+    HORA=$(date +%H)
+    if [ "$HORA" -lt 8 ] || [ "$HORA" -gt 20 ]; then
+        echo "BLOQUEADO: Intento de acceso fuera de horario ($HORA h)."
+        exit 1 # Esto cancela la acción en GhostKnock
+    fi
+    exit 0 # Permitir
+fi
+
+# ==============================================================================
+# 2. ETAPA POST-EJECUCIÓN (Notificación)
+# ==============================================================================
+if [ "$GK_STAGE" == "global_success" ]; then
+    MSG="🚀 [SUCCESS] $GK_USER ejecutó '$GK_ACTION' desde $GK_IP"
+    # Enviar a Telegram
+    curl -s -X POST "https://api.telegram.org/botTOKEN/sendMessage" -d chat_id="12345" -d text="$MSG"
+fi
+
+if [ "$GK_STAGE" == "global_error" ]; then
+    MSG="⚠️ [ERROR] Fallo al ejecutar '$GK_ACTION' por $GK_USER. Razón: $GK_ERROR_MSG"
+    # Registrar en Syslog local con prioridad alta
+    logger -p local0.err -t ghostknock_audit "$MSG"
+fi
+
+# ==============================================================================
+# 3. ETAPA REVERSIÓN (Auditoría de Cierre)
+# ==============================================================================
+if [ "$GK_STAGE" == "global_revert" ]; then
+    if [ "$GK_STATUS" == "success" ]; then
+        # Reversión OK (Silenciosa o Log)
+        logger -t ghostknock_audit "🔒 [REVERT OK] Cierre automático completado para acción '$GK_ACTION'"
+    else
+        # Reversión FALLIDA (Crítico: El puerto sigue abierto)
+        MSG="🚨 [REVERT FAILED] Atención: Fallo al revertir '$GK_ACTION'. Revisar sistema manualmente. Error: $GK_ERROR_MSG"
+        curl -s -X POST "https://api.telegram.org/botTOKEN/sendMessage" -d chat_id="ADMIN_ID" -d text="$MSG"
+    fi
+fi
+```
