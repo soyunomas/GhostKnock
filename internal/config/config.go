@@ -42,6 +42,14 @@ type Security struct {
 	DefaultActionCooldownSeconds int     `yaml:"default_action_cooldown_seconds"`
 	RateLimitPerSecond           float64 `yaml:"rate_limit_per_second"`
 	RateLimitBurst               int     `yaml:"rate_limit_burst"`
+
+	// --- NUEVO: Lista Negra (Blacklist) ---
+	// Lista cruda del YAML (ej. "1.2.3.4", "10.0.0.0/8")
+	DenyIPs []string `yaml:"deny_ips"`
+
+	// Estructuras internas optimizadas para búsqueda rápida (No se leen del YAML)
+	deniedIPMap   map[string]struct{}
+	deniedSubnets []*net.IPNet
 }
 
 // Config es la estructura raíz de nuestro archivo de configuración.
@@ -160,11 +168,52 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Security.RateLimitBurst = 3
 	}
 
+	// --- PROCESAMIENTO DE LISTA NEGRA (Parseo eficiente) ---
+	cfg.Security.deniedIPMap = make(map[string]struct{})
+	cfg.Security.deniedSubnets = make([]*net.IPNet, 0)
+
+	for _, entry := range cfg.Security.DenyIPs {
+		// 1. Intentar parsear como CIDR (ej. 192.168.1.0/24)
+		_, ipNet, err := net.ParseCIDR(entry)
+		if err == nil {
+			cfg.Security.deniedSubnets = append(cfg.Security.deniedSubnets, ipNet)
+			continue
+		}
+
+		// 2. Intentar parsear como IP única (ej. 192.168.1.50)
+		ip := net.ParseIP(entry)
+		if ip != nil {
+			cfg.Security.deniedIPMap[ip.String()] = struct{}{}
+			continue
+		}
+
+		return nil, fmt.Errorf("entrada inválida en 'deny_ips': '%s' no es una IP ni un CIDR válido", entry)
+	}
+	// -------------------------------------------------------
+
 	if err := validateConfig(&cfg); err != nil {
 		return nil, fmt.Errorf("configuración inválida: %w", err)
 	}
 
 	return &cfg, nil
+}
+
+// IsIPDenied comprueba eficientemente si una IP está en la lista negra.
+func (c *Config) IsIPDenied(ip net.IP) bool {
+	// 1. Búsqueda O(1) en mapa de IPs exactas
+	if _, ok := c.Security.deniedIPMap[ip.String()]; ok {
+		return true
+	}
+
+	// 2. Búsqueda O(N) en lista de subredes
+	// Esto sigue siendo muy rápido comparado con la criptografía.
+	for _, subnet := range c.Security.deniedSubnets {
+		if subnet.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func validateConfig(cfg *Config) error {

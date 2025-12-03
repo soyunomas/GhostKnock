@@ -170,22 +170,30 @@ ghostknock -host MISERVIDOR \
 
 ---
 
-## ⚙️ Referencia de Configuración (`config.yaml`)
+## ⚙️ Referencia de Configuración Completa (`config.yaml`)
 
-| Sección | Campo | Descripción |
-| :--- | :--- | :--- |
-| **Raíz** | `server_private_key_path` | Ruta a la clave privada del servidor. |
-| **`listener`** | `interface` | Interfaz (ej: `eth0`, `any`). **Requiere restart si cambia.** |
-| | `port` | Puerto UDP. **Requiere restart si cambia.** |
-| **`logging`** | `log_level` | `debug`, `info`, `warn`, `error`. |
-| **`users`** | `public_key` | Clave pública Base64 del cliente. |
-| | `actions` | Lista de IDs de acciones permitidas. |
-| | `source_ips` | Lista de IPs/CIDRs permitidos (Opcional). |
-| **`actions`** | `command` | Comando a ejecutar. Soporta `{{.Params.x}}`. |
-| | `timeout_seconds` | Tiempo máx antes de matar el proceso (Def: 30s). |
-| | `cooldown_seconds` | Tiempo de espera entre ejecuciones. |
-| | `revert_command` | Comando de reversión automática. |
-| | `sensitive_params` | Parámetros a ocultar en los logs (`*****`). |
+Aquí se detallan todas las opciones disponibles para configurar el demonio.
+
+| Sección | Campo | Tipo | Descripción |
+| :--- | :--- | :--- | :--- |
+| *(Raíz)* | `server_private_key_path` | string | **[Obligatorio]** Ruta a la clave privada del servidor. |
+| **`listener`** | `interface` | string | **[Obligatorio]** Interfaz de red (ej: `eth0`, `any`). **Requiere restart si cambia.** |
+| | `port` | int | **[Obligatorio]** Puerto UDP. **Requiere restart si cambia.** |
+| | `listen_ip` | string | (Opcional) Escuchar solo en una IP específica. |
+| **`logging`** | `log_level` | string | Nivel de log: `debug`, `info`, `warn`, `error`. |
+| **`security`** | `deny_ips` | list | Lista negra de IPs o rangos CIDR (ej: `["1.2.3.4", "10.0.0.0/8"]`). Los paquetes de estas fuentes se descartan instantáneamente para ahorrar CPU. |
+| | `replay_window_seconds` | int | Ventana de tiempo para aceptar un knock (Default: 5s). |
+| | `rate_limit_per_second` | float | Paquetes por segundo permitidos por IP (Default: 1.0). |
+| | `rate_limit_burst` | int | Ráfaga máxima permitida (Default: 3). |
+| **`users`** | `name` | string | Identificador del usuario. |
+| | `public_key` | string | Clave pública Base64 del cliente. |
+| | `actions` | list | Lista de IDs de acciones permitidas. |
+| | `source_ips` | list | (Opcional) Whitelist de IPs/CIDRs para este usuario. |
+| **`actions`** | `command` | string | Comando a ejecutar. Soporta `{{.Params.x}}`. |
+| | `timeout_seconds` | int | Tiempo máx antes de matar el proceso (Default: 30s). |
+| | `cooldown_seconds` | int | Tiempo de espera entre ejecuciones. |
+| | `revert_command` | string | Comando de reversión automática. |
+| | `sensitive_params` | list | Parámetros a ocultar en los logs (`*****`). |
 
 ---
 

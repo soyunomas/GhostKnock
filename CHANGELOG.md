@@ -5,7 +5,8 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 ## [Unreleased]
 
 ### Added
-- **Hot Reload (Configuración en Caliente):** Se ha implementado soporte para la señal `SIGHUP`. Ahora es posible recargar la configuración (usuarios, claves, acciones) sin detener el servicio enviando `systemctl reload ghostknockd`. Nota: Los cambios en la interfaz de red/puerto requieren un reinicio completo.
+- **Hot Reload (Configuración en Caliente):** Se ha implementado soporte para la señal `SIGHUP`. Ahora es posible recargar la configuración (usuarios, claves, acciones, lista negra) sin detener el servicio enviando `systemctl reload ghostknockd`. La caché de seguridad se mantiene intacta.
+- **Optimización de Defensa (Blacklist):** Nueva directiva `deny_ips` en `security`. Permite definir una lista de IPs o rangos CIDR que serán descartados instantáneamente ("Short-Circuit"). Esto ocurre antes de cualquier operación criptográfica o de rate-limit, reduciendo drásticamente el consumo de CPU ante ataques desde orígenes conocidos.
 - **Empaquetado (Logrotate):** Se ha añadido configuración automática de `logrotate` en el paquete `.deb`. El log `/var/log/ghostknockd.log` se rota diariamente y se retiene 14 días.
 
 ## [2.0.0]

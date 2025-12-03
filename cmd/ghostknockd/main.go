@@ -333,6 +333,13 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	// 1. Obtener configuración actual de forma segura (Thread-Safe)
 	currentConfig := s.getConfig()
 
+	// 1.5. LISTA NEGRA: Verificación Ultrarrápida (Short-Circuit)
+	// Comprobamos esto ANTES del Rate Limit, la caché y la criptografía.
+	if currentConfig.IsIPDenied(packetInfo.SourceIP) {
+		// Drop silencioso inmediato. Ahorra CPU.
+		return
+	}
+
 	// 2. Rate Limit IP (Anti-DoS ligero)
 	// Usamos los valores de la config actual
 	limiter := s.getLimiter(packetInfo.SourceIP, currentConfig.Security.RateLimitPerSecond, currentConfig.Security.RateLimitBurst)
