@@ -1,5 +1,3 @@
---- START OF FILE CHANGELOG.md ---
-
 # Changelog
 
 Todos los cambios notables en este proyecto serán documentados en este archivo.
