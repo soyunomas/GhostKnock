@@ -27,6 +27,10 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
     *   **Anti-Replay Híbrido:** Sistema de doble verificación (lectura rápida + bloqueo de escritura) que detecta y rechaza paquetes duplicados para evitar la reutilización de credenciales.
     *   **Memoria Blindada (Anti-OOM):** Arquitectura diseñada para evitar el agotamiento de memoria ante ataques masivos, con purga automática de tablas de rastreo y límites estrictos.
 
+*   🪝 **Sistema de Hooks (Event Driven):**
+    *   **Integración y Auditoría:** Ejecuta scripts externos antes (`pre_execute`), después (`on_success`/`on_error`) o al revertir (`on_revert`) una acción.
+    *   **Contexto Inyectado:** Los scripts reciben automáticamente variables de entorno con el usuario, IP, acción y parámetros (`GK_USER`, `GK_IP`, `GK_PARAM_*`). Ideal para notificaciones (Telegram, Slack) o logs centralizados.
+
 *   👮 **Principio de Mínimo Privilegio:**
     *   Puedes configurar comandos para que se ejecuten como usuarios restringidos (ej. `www-data`), limitando el impacto en el sistema.
 
@@ -204,6 +208,40 @@ ghostknock -profile prod -host 10.0.0.99 -action status
 
 ---
 
+## 🪝 Integración: Sistema de Hooks
+
+GhostKnock permite definir scripts externos que se ejecutan automáticamente en respuesta a eventos del sistema. Esto es fundamental para auditoría, notificaciones a Slack/Telegram o validaciones complejas.
+
+**Configuración Global (`config.yaml`):**
+
+```yaml
+hooks:
+  # Se ejecuta ANTES de la acción. Si el script sale con error (exit code != 0), 
+  # la acción se cancela y no se ejecuta.
+  pre_execute: "/usr/local/bin/gk_audit.sh"
+  
+  # Se ejecuta tras el éxito del comando principal
+  on_success: "/usr/local/bin/gk_notify.sh"
+  
+  # Se ejecuta si el comando falla
+  on_error: "/usr/local/bin/gk_alert.sh"
+```
+
+**Variables de Entorno Inyectadas:**
+
+Los scripts reciben automáticamente el contexto de ejecución:
+
+| Variable | Descripción |
+| :--- | :--- |
+| `GK_USER` | Nombre del usuario autenticado (ej: `admin`). |
+| `GK_IP` | Dirección IP de origen del knock. |
+| `GK_ACTION` | ID de la acción ejecutada. |
+| `GK_STAGE` | Etapa actual: `global_pre`, `action_post`, `global_success`, `global_error`, `global_revert`. |
+| `GK_STATUS` | Resultado final: `success` o `error`. |
+| `GK_PARAM_*` | Parámetros dinámicos en mayúsculas (ej: `-args "target=1.1.1.1"` -> `GK_PARAM_TARGET`). |
+
+---
+
 ## 💡 Recetario: Ejemplos Prácticos para SysAdmins
 
 A continuación, se presentan casos de uso reales para la gestión diaria de infraestructura, detallando la configuración del servidor y el comando exacto del cliente.
@@ -317,6 +355,10 @@ Crea un usuario de emergencia. El uso de `sensitive_params` asegura que la contr
 | **`security`** | `deny_ips` | list | ❌ | **(v2.1)** Lista negra de IPs o rangos CIDR (ej: `["1.2.3.4", "10.0.0.0/8"]`). Drop instantáneo. |
 | | `replay_window_seconds` | int | ❌ | Ventana de tiempo para aceptar un knock (Default: 5s). |
 | | `rate_limit_per_second` | float | ❌ | Paquetes por segundo por IP (Default: 1.0). |
+| **`hooks`** | `pre_execute` | string | ❌ | **(v2.1)** Script a ejecutar antes de la acción. Bloqueante. |
+| | `on_success` | string | ❌ | Script tras éxito. |
+| | `on_error` | string | ❌ | Script tras error. |
+| | `on_revert` | string | ❌ | Script tras reversión. |
 | **`users`** | `name` | string | ✅ | Identificador del usuario. |
 | | `public_key` | string | ✅ | Clave pública Base64 del cliente. |
 | | `actions` | list | ✅ | Lista de IDs de acciones permitidas. |
@@ -327,6 +369,8 @@ Crea un usuario de emergencia. El uso de `sensitive_params` asegura que la contr
 | | `cooldown_seconds` | int | ❌ | Tiempo de espera entre ejecuciones. |
 | | `revert_command` | string | ❌ | Comando de reversión automática. |
 | | `sensitive_params` | list | ❌ | Parámetros a ocultar en los logs (`*****`). |
+| | `pre_hook` | string | ❌ | Hook específico previo a la acción. |
+| | `post_hook` | string | ❌ | Hook específico posterior a la acción. |
 
 ---
 

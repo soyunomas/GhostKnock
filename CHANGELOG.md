@@ -5,9 +5,10 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 ## [2.1.0]
 
 ### Added
+- **Sistema de Hooks (Event Driven):** Nueva capacidad para ejecutar scripts externos en puntos clave del ciclo de vida (`pre_execute`, `on_success`, `on_error`, `on_revert`). Permite integraciones avanzadas (notificaciones Telegram/Slack, logs a SIEM) y validaciones personalizadas. El contexto se inyecta mediante variables de entorno (`GK_USER`, `GK_IP`, `GK_STAGE`, `GK_STATUS`).
 - **Perfiles de Cliente (Client Profiles):** Se ha eliminado la necesidad de escribir argumentos largos y repetitivos. El cliente `ghostknock` ahora soporta un archivo de configuración `profiles.yaml` (en `~/.config/ghostknock/` o `%APPDATA%\ghostknock\`) para definir hosts, puertos y claves.
 - **Nuevo Flag `-profile`:** Permite cargar una configuración predefinida por nombre (ej: `ghostknock -profile prod -action restart`). Los flags manuales tienen prioridad sobre el perfil.
-- **Hot Reload (Configuración en Caliente):** Se ha implementado soporte para la señal `SIGHUP`. Ahora es posible recargar la configuración (usuarios, claves, acciones, lista negra) sin detener el servicio enviando `systemctl reload ghostknockd`. La caché de seguridad se mantiene intacta.
+- **Hot Reload (Configuración en Caliente):** Se ha implementado soporte para la señal `SIGHUP`. Ahora es posible recargar la configuración (usuarios, claves, acciones, lista negra, hooks) sin detener el servicio enviando `systemctl reload ghostknockd`. La caché de seguridad se mantiene intacta.
 - **Optimización de Defensa (Blacklist):** Nueva directiva `deny_ips` en `security`. Permite definir una lista de IPs o rangos CIDR que serán descartados instantáneamente ("Short-Circuit"). Esto ocurre antes de cualquier operación criptográfica.
 - **Empaquetado (Logrotate):** Se ha añadido configuración automática de `logrotate` en el paquete `.deb`. El log `/var/log/ghostknockd.log` se rota diariamente y se retiene 14 días.
 - **Ejemplos de Configuración:** Se incluye `profiles.yaml.example` en la distribución.

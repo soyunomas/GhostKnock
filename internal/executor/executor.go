@@ -46,26 +46,90 @@ func redactParams(params map[string]string, sensitive []string) map[string]strin
 }
 
 // Execute procesa una acción, valida sus parámetros, la ejecuta y programa su reversión.
-func Execute(action config.Action, sourceIP net.IP, params map[string]string) error {
-	// Usamos una versión sanitizada de los parámetros para el log de debug
+// MODIFICADO (v2.2): Ahora acepta 'user' y 'globalHooks' para el sistema de Hooks.
+func Execute(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks) error {
+	// Usamos una versión sanitizada de los parámetros para el log de debug interno
 	safeParams := redactParams(params, action.SensitiveParams)
-	slog.Debug("Ejecutando acción", "source_ip", sourceIP.String(), "params", safeParams)
+	slog.Debug("Iniciando flujo de ejecución", "user", user, "source_ip", sourceIP.String(), "params", safeParams)
 
-	// Ejecutar el comando principal pasando los parámetros
-	if err := runCommand("main", action.Command, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams); err != nil {
-		return fmt.Errorf("falló la ejecución del comando principal: %w", err)
+	// --- 1. PREPARAR CONTEXTO DE HOOKS ---
+	// Nota: Los hooks reciben los parámetros CRUDOS en variables de entorno (GK_PARAM_X).
+	// Se asume que el script del hook es seguro y confiable.
+	hCtx := HookContext{
+		User:     user,
+		ActionID: "unknown_id", // La struct Action actual no tiene el ID, pero el contexto global sí. (Mejora futura: pasar ID explícito)
+		SourceIP: sourceIP.String(),
+		Params:   params,
 	}
 
+	// --- 2. GLOBAL PRE-HOOK (Bloqueante) ---
+	// Si falla, abortamos todo.
+	hCtx.Stage = "global_pre"
+	if err := RunHook(globalHooks.PreExecute, hCtx); err != nil {
+		slog.Warn("Ejecución cancelada por Global Pre-Hook", "user", user)
+		return fmt.Errorf("action cancelled by Global Pre-Hook")
+	}
+
+	// --- 3. ACTION PRE-HOOK (Bloqueante) ---
+	hCtx.Stage = "action_pre"
+	if err := RunHook(action.PreHook, hCtx); err != nil {
+		slog.Warn("Ejecución cancelada por Action Pre-Hook", "user", user)
+		return fmt.Errorf("action cancelled by Action Pre-Hook")
+	}
+
+	// --- 4. EJECUCIÓN DEL COMANDO PRINCIPAL ---
+	cmdErr := runCommand("main", action.Command, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams)
+
+	// --- 5. DETERMINAR ESTADO PARA POST-HOOKS ---
+	status := "success"
+	errMsg := ""
+	if cmdErr != nil {
+		status = "error"
+		errMsg = cmdErr.Error()
+	}
+	hCtx.Status = status
+	hCtx.ErrorMsg = errMsg
+
+	// --- 6. ACTION POST-HOOK (Fire-and-Forget) ---
+	if action.PostHook != "" {
+		// Lanzamos en goroutine para no retrasar la respuesta o el siguiente paso
+		hCtxPost := hCtx
+		hCtxPost.Stage = "action_post"
+		go RunHook(action.PostHook, hCtxPost)
+	}
+
+	// --- 7. GLOBAL POST-HOOKS (Fire-and-Forget) ---
+	if status == "success" {
+		if globalHooks.OnSuccess != "" {
+			hCtxGlobal := hCtx
+			hCtxGlobal.Stage = "global_success"
+			go RunHook(globalHooks.OnSuccess, hCtxGlobal)
+		}
+	} else {
+		if globalHooks.OnError != "" {
+			hCtxGlobal := hCtx
+			hCtxGlobal.Stage = "global_error"
+			go RunHook(globalHooks.OnError, hCtxGlobal)
+		}
+	}
+
+	// --- 8. PROGRAMAR REVERSIÓN ---
 	// Si hay un comando de reversión y un retardo, programarlo.
 	if action.RevertCommand != "" && action.RevertDelaySeconds > 0 {
-		go scheduleRevert(action, sourceIP, params)
+		// Pasamos los hooks y el usuario a la rutina de reversión
+		go scheduleRevert(action, user, sourceIP, params, globalHooks)
+	}
+
+	if cmdErr != nil {
+		return fmt.Errorf("falló la ejecución del comando principal: %w", cmdErr)
 	}
 
 	return nil
 }
 
 // scheduleRevert espera el tiempo especificado y luego ejecuta el comando de reversión.
-func scheduleRevert(action config.Action, sourceIP net.IP, params map[string]string) {
+// MODIFICADO (v2.2): Soporte para Hooks de reversión.
+func scheduleRevert(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks) {
 	delay := time.Duration(action.RevertDelaySeconds) * time.Second
 	slog.Info(
 		"Programando reversión de acción",
@@ -75,17 +139,52 @@ func scheduleRevert(action config.Action, sourceIP net.IP, params map[string]str
 	time.Sleep(delay)
 
 	slog.Info("Ejecutando reversión", "source_ip", sourceIP.String())
-	// Pasamos también los SensitiveParams a la reversión
-	if err := runCommand("revert", action.RevertCommand, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams); err != nil {
+	
+	// Ejecutar comando de reversión
+	err := runCommand("revert", action.RevertCommand, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams)
+	
+	if err != nil {
 		slog.Error(
 			"Falló la ejecución del comando de reversión",
 			"source_ip", sourceIP.String(),
 			"error", err,
 		)
 	}
+
+	// --- HOOKS DE REVERSIÓN ---
+	
+	// Preparamos el contexto
+	status := "success"
+	errMsg := ""
+	if err != nil {
+		status = "error"
+		errMsg = err.Error()
+	}
+
+	hCtx := HookContext{
+		User:     user,
+		ActionID: "revert_unknown", // Idem que en Execute
+		SourceIP: sourceIP.String(),
+		Params:   params,
+		Status:   status,
+		ErrorMsg: errMsg,
+	}
+
+	// 1. Action Revert Hook
+	if action.RevertHook != "" {
+		hCtx.Stage = "action_revert"
+		// Ejecutamos síncronamente aquí porque ya estamos en una goroutine separada
+		RunHook(action.RevertHook, hCtx)
+	}
+
+	// 2. Global Revert Hook
+	if globalHooks.OnRevert != "" {
+		hCtx.Stage = "global_revert"
+		RunHook(globalHooks.OnRevert, hCtx)
+	}
 }
 
-// runCommand es el núcleo de la ejecución segura. Ahora acepta sensitiveParams.
+// runCommand es el núcleo de la ejecución segura.
 func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string, sensitiveParams []string) error {
 	// 1. VALIDACIÓN DE SEGURIDAD DE PARÁMETROS (Sanitización Estricta)
 	for key, value := range params {

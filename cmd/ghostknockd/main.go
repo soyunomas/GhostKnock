@@ -432,7 +432,7 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 				actionDef.TimeoutSeconds = 30
 			}
 
-			if err := executor.Execute(actionDef, packetInfo.SourceIP, payload.Params); err != nil {
+			if err := executor.Execute(actionDef, authorizedUser.Name, packetInfo.SourceIP, payload.Params, currentConfig.GlobalHooks); err != nil {
 				slog.Error("Error en ejecución", "action", payload.ActionID, "error", err)
 			}
 		}()

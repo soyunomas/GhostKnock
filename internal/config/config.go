@@ -24,6 +24,21 @@ type Logging struct {
 	LogLevel string `yaml:"log_level"`
 }
 
+// Hooks define scripts externos que se ejecutan en diferentes puntos del ciclo de vida global.
+type Hooks struct {
+	// Se ejecuta ANTES de la acción. Si exit code != 0, cancela la ejecución.
+	PreExecute string `yaml:"pre_execute,omitempty"`
+
+	// Se ejecuta INMEDIATAMENTE DESPUÉS de que el comando principal termine con éxito (exit 0).
+	OnSuccess string `yaml:"on_success,omitempty"`
+
+	// Se ejecuta si el comando principal falla o hace timeout.
+	OnError string `yaml:"on_error,omitempty"`
+
+	// Se ejecuta DESPUÉS de que termine el comando de reversión (revert_command).
+	OnRevert string `yaml:"on_revert,omitempty"`
+}
+
 // Action define una plantilla de comando y su comportamiento de reversión.
 type Action struct {
 	Command            string   `yaml:"command"`
@@ -34,6 +49,16 @@ type Action struct {
 	CooldownSeconds    *int     `yaml:"cooldown_seconds,omitempty"`
 	RunAsUser          string   `yaml:"run_as_user,omitempty"`
 	SensitiveParams    []string `yaml:"sensitive_params,omitempty"`
+
+	// --- HOOKS ESPECÍFICOS DE ACCIÓN (v2.2) ---
+	// Hook específico previo a esta acción
+	PreHook string `yaml:"pre_hook,omitempty"`
+
+	// Hook específico posterior a esta acción
+	PostHook string `yaml:"post_hook,omitempty"`
+
+	// Hook específico tras la reversión de esta acción
+	RevertHook string `yaml:"revert_hook,omitempty"`
 }
 
 // Security define parámetros de seguridad ajustables.
@@ -59,6 +84,7 @@ type Config struct {
 	Logging              Logging           `yaml:"logging"`
 	Daemon               Daemon            `yaml:"daemon"`
 	Security             Security          `yaml:"security"`
+	GlobalHooks          Hooks             `yaml:"hooks"` // Configuración global de Hooks
 	Users                []User            `yaml:"users"`
 	Actions              map[string]Action `yaml:"actions"`
 }
