@@ -1,4 +1,4 @@
-# Makefile para el proyecto GhostKnock v2.0.0
+# Makefile para el proyecto GhostKnock v2.1.0
 
 # ==============================================================================
 # Variables de Configuración
@@ -8,7 +8,7 @@ GO ?= go
 GOFLAGS ?= -v
 
 # --- Variables para el empaquetado DEB ---
-VERSION := 2.0.0
+VERSION := 2.1.0
 ARCH := $(shell dpkg --print-architecture)
 # Inyectamos la versión en tiempo de compilación para los flags -version
 LDFLAGS_VERSION := -ldflags="-X main.version=$(VERSION)"
@@ -110,18 +110,24 @@ package-deb-server: $(ALL_BINS)
 	@dpkg-deb --build $(BUILD_DIR)/server $(PKG_SERVER_NAME)
 	@echo "✅ Paquete completo creado: $(PKG_SERVER_NAME)"
 
-# Paquete LIGERO (Solo Cliente + Keygen)
+# Paquete LIGERO (Solo Cliente + Keygen + Perfiles de ejemplo)
 package-deb-client: $(CLIENT_BINS)
 	@echo "📦 Empaquetando CLIENTE GhostKnock (Solo herramientas)..."
 	@rm -rf $(BUILD_DIR)/client
 	@mkdir -p $(BUILD_DIR)/client/DEBIAN
 	@mkdir -p $(BUILD_DIR)/client$(BINDIR)
+	# Creamos el directorio de config también en el cliente para dejar el ejemplo
+	@mkdir -p $(BUILD_DIR)/client$(ETCDIR)
 	
 	# Metadatos (Usamos el control-client específico)
 	@install -m 0644 packaging/debian/control-client $(BUILD_DIR)/client/DEBIAN/control
 	
-	# Archivos
+	# Archivos Binarios
 	@install -m 0755 $(CLIENT_BINS) $(BUILD_DIR)/client$(BINDIR)/
+
+	# Archivos de Ejemplo (Perfiles)
+	# Se deja en /etc/ghostknock/profiles.yaml.example para referencia
+	@install -m 0644 profiles.yaml.example $(BUILD_DIR)/client$(ETCDIR)/profiles.yaml.example
 	
 	# Construcción
 	@dpkg-deb --build $(BUILD_DIR)/client $(PKG_CLIENT_NAME)
@@ -149,6 +155,9 @@ install: build-linux
 	@install -m 0755 $(ALL_BINS) $(BINDIR)
 	# El archivo de ejemplo también restringido, por si acaso.
 	@install -m 0600 config.yaml $(ETCDIR)/config.yaml.example
+	# Instalamos el ejemplo de perfiles también
+	@install -m 0644 profiles.yaml.example $(ETCDIR)/profiles.yaml.example
+
 	@install -m 0644 packaging/systemd/ghostknockd.service $(SYSTEMDDIR)/ghostknockd.service
 	@install -m 0644 packaging/logrotate/ghostknockd $(LOGROTATEDIR)/ghostknockd
 	@echo "Instalación completa."
@@ -172,8 +181,8 @@ help:
 	@echo "  make all                - Compila ambas plataformas."
 	@echo ""
 	@echo "Empaquetado (.deb):"
-	@echo "  make package-deb-server - Crea .deb COMPLETO (Daemon + Client + Keygen + Logrotate)."
-	@echo "  make package-deb-client - Crea .deb LIGERO (Client + Keygen)."
+	@echo "  make package-deb-server - Crea .deb COMPLETO (Daemon + Client + Tools)."
+	@echo "  make package-deb-client - Crea .deb LIGERO (Client + Tools + Profiles Ex)."
 	@echo ""
 	@echo "Gestión:"
 	@echo "  make install            - Instala todo en el sistema local."

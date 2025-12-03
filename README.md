@@ -1,7 +1,7 @@
 # 👻 GhostKnock
 
 [![Licencia: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/badge/release-v2.0.0-blue.svg)](https://github.com/soyunomas/GhostKnock/releases)
+[![Release](https://img.shields.io/badge/release-v2.1.0-blue.svg)](https://github.com/soyunomas/GhostKnock/releases)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-lightgrey.svg)]()
 
 **GhostKnock** es un sistema de **ejecución remota segura, invisible y confidencial**.
@@ -20,7 +20,7 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 *   🚀 **Monitorización Pasiva y Eficiente:**
     *   **Filtrado en Origen:** GhostKnock aplica filtros a nivel de sistema operativo (BPF). El kernel solo notifica a la aplicación cuando llega un paquete UDP al puerto exacto, garantizando un consumo de CPU prácticamente nulo incluso en redes con mucho tráfico.
-    *   **Protección Short-Circuit (Nueva):** Capacidad de definir una lista negra (`deny_ips`) que descarta tráfico de atacantes conocidos *antes* de realizar cualquier operación criptográfica, ahorrando recursos.
+    *   **Protección Short-Circuit (Nueva v2.1):** Capacidad de definir una lista negra (`deny_ips`) que descarta tráfico de atacantes conocidos *antes* de realizar cualquier operación criptográfica, ahorrando recursos de CPU.
 
 *   🔐 **Seguridad y Privacidad (Hardening):**
     *   **Cifrado de Extremo a Extremo:** Utiliza estándares modernos (`Ed25519` + `X25519`) para autenticación y confidencialidad. Solo el servidor puede leer qué comando estás enviando.
@@ -32,6 +32,9 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 *   🔄 **Gestión en Caliente (Hot Reload):**
     *   Permite añadir usuarios, rotar claves o modificar acciones editando la configuración y recargando el servicio (`systemctl reload`) **sin detener el servicio** y manteniendo intacta la caché de seguridad.
+
+*   ⚡ **Perfiles de Cliente:**
+    *   El cliente CLI soporta un archivo de configuración (`profiles.yaml`) para definir alias de conexión, evitando tener que escribir IPs y rutas de claves repetidamente.
 
 ---
 
@@ -58,13 +61,13 @@ Descarga la última versión desde [Releases](https://github.com/soyunomas/Ghost
 
 *   **Para el Servidor (Demonio + Herramientas):**
     ```bash
-    sudo dpkg -i ghostknock_2.0.0_amd64.deb
+    sudo dpkg -i ghostknock_2.1.0_amd64.deb
     # Se instala el servicio systemd, logrotate y se asegura /etc/ghostknock
     ```
 
 *   **Para Clientes Remotos (Solo Herramientas):**
     ```bash
-    sudo dpkg -i ghostknock-client_2.0.0_amd64.deb
+    sudo dpkg -i ghostknock-client_2.1.0_amd64.deb
     ```
 
 ### Opción B: Ejecutables para Windows
@@ -142,57 +145,166 @@ ghostknock -host MISERVIDOR \
 
 ---
 
-## ⚡ Truco Pro: Simplificación con Alias
+## ⚡ Uso Avanzado: Perfiles de Cliente
 
-El comando completo puede resultar largo. Puedes configurar un alias en tu shell (`~/.bashrc`, `~/.zshrc` o PowerShell) para fijar los parámetros estáticos (Host y Claves).
+Para evitar escribir la IP, puerto y ruta de claves en cada comando, GhostKnock v2.1 introduce los **Perfiles**.
 
-**En Linux / Mac:**
-```bash
-# Añadir a tu .bashrc
-alias gk='ghostknock -host 192.168.1.50 -server-pubkey ~/.config/ghostknock/server.pub'
+### 1. Crear el archivo de configuración
+Crea un archivo `profiles.yaml` en tu directorio de configuración:
+*   **Linux:** `~/.config/ghostknock/profiles.yaml`
+*   **Windows:** `%APPDATA%\ghostknock\profiles.yaml`
+
+```yaml
+profiles:
+  # Perfil para el servidor de casa
+  casa:
+    host: "192.168.1.50"
+    port: 3001
+    server_pubkey: "/home/usuario/.config/ghostknock/server_casa.pub"
+    
+  # Perfil para producción
+  prod:
+    host: "203.0.113.10"
+    port: 3001
+    server_pubkey: "C:\\Keys\\prod_server.pub"
+    key: "C:\\Keys\\id_ed25519_prod" # Clave privada específica para este server
 ```
 
-**Uso simplificado:**
+### 2. Estructura y Uso de Perfiles (`profiles.yaml`)
+
+El archivo `profiles.yaml` es el corazón de la automatización en el cliente. Permite definir múltiples entornos (Prod, Staging, Home) con sus respectivas claves y puertos.
+
+**Ubicación del archivo:**
+*   🐧 **Linux:** `~/.config/ghostknock/profiles.yaml`
+*   🪟 **Windows:** `%APPDATA%\ghostknock\profiles.yaml`
+
+**Estructura de Campos:**
+
+| Campo | Requerido | Descripción |
+| :--- | :---: | :--- |
+| `host` | ✅ | Dirección IP o dominio del servidor objetivo. |
+| `server_pubkey` | ✅ | Ruta local al archivo `.pub` del servidor (para cifrar el mensaje). |
+| `port` | ❌ | Puerto UDP. Si se omite, usa el **3001** por defecto. |
+| `key` | ❌ | Ruta a tu clave privada. Si se omite, usa la default (`~/.config/ghostknock/id_ed25519`). |
+
+**Ejemplo de uso en terminal:**
+
 ```bash
-gk -action open-ssh
-gk -action ban-ip -args "target=1.2.3.4"
+# 1. Acceso simple usando el perfil 'casa' (usa puerto 3001 y clave default)
+ghostknock -profile casa -action open-ssh
+
+# 2. Acceso a producción (usa puerto custom y clave específica definidos en YAML)
+ghostknock -profile prod -action restart-nginx
+
+# 3. Sobrescribir el host al vuelo (útil para testenar una IP nueva con la misma config)
+ghostknock -profile prod -host 10.0.0.99 -action status
 ```
+
+> **Nota de Prioridad:** Los flags manuales (`-host`, `-port`, etc.) siempre tienen preferencia sobre lo definido en el perfil.
 
 ---
 
-## 💡 Recetario: Ejemplos Prácticos
+## 💡 Recetario: Ejemplos Prácticos para SysAdmins
 
-### 1. Hola Mundo (Test)
-*   **Config:** `command: 'echo "Hola {{.Params.msg}}" > /tmp/hi'`
-*   **Cliente:** `ghostknock ... -action test -args "msg=Mundo"`
+A continuación, se presentan casos de uso reales para la gestión diaria de infraestructura, detallando la configuración del servidor y el comando exacto del cliente.
 
-### 2. Banear IP (Firewall Dinámico)
-*   **Config:** `command: "iptables -A INPUT -s {{.Params.ip}} -j DROP"`
-*   **Cliente:** `ghostknock ... -action ban-ip -args "ip=1.2.3.4"`
+### 1. "Port Knocking 2.0": Acceso SSH Temporal
+Abre el puerto 22 **solo para tu IP actual** y lo cierra automáticamente tras 5 minutos. Ideal para mantener el SSH cerrado al mundo.
 
-### 3. Despliegue Web (Usuario restringido)
-*   **Config:**
+*   **Configuración del Servidor (`config.yaml`):**
     ```yaml
-    "deploy":
-      run_as_user: "www-data"
-      command: "cd /var/www/app && git pull"
-      timeout_seconds: 120
+    "open-ssh":
+      # Inserta regla ACCEPT en la posición 1 para tu IP
+      command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
+      # Elimina la regla automáticamente
+      revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
+      revert_delay_seconds: 300
+      cooldown_seconds: 60
     ```
-*   **Cliente:** `ghostknock ... -action deploy`
+*   **Comando Cliente:**
+    ```bash
+    ghostknock -profile prod -action open-ssh
+    ```
 
-### 4. Creación de Usuario (Privacidad en Logs)
-Crea un usuario pasando contraseña. `sensitive_params` la ocultará en `/var/log/ghostknockd.log`.
+### 2. Gestión de Servicios: Reinicio Genérico
+Reinicia cualquier servicio de Systemd pasando el nombre como parámetro. Útil para reiniciar Nginx, MySQL o PHP-FPM sin entrar por SSH.
 
-*   **Config:**
+*   **Configuración del Servidor:**
     ```yaml
-    "create-user":
-      command: "useradd -p {{.Params.pass}} {{.Params.user}}"
+    "systemd-restart":
+      # {{.Params.svc}} se sustituye por el argumento.
+      # GhostKnock valida que solo contenga caracteres seguros (a-z, 0-9, -, _).
+      command: "systemctl restart {{.Params.svc}}"
+      timeout_seconds: 20
+    ```
+*   **Comando Cliente:**
+    ```bash
+    # Reiniciar Nginx
+    ghostknock -profile prod -action systemd-restart -args "svc=nginx"
+    
+    # Reiniciar Docker
+    ghostknock -profile prod -action systemd-restart -args "svc=docker"
+    ```
+
+### 3. Operaciones Docker: Reinicio de Contenedor
+Reinicia un contenedor específico que se ha quedado colgado.
+
+*   **Configuración del Servidor:**
+    ```yaml
+    "docker-bounce":
+      command: "docker restart {{.Params.id}}"
+      timeout_seconds: 45
+    ```
+*   **Comando Cliente:**
+    ```bash
+    ghostknock -profile prod -action docker-bounce -args "id=api-gateway-v2"
+    ```
+
+### 4. Ciberseguridad: Banear IP Atacante (Active Defense)
+Si detectas un ataque desde una IP en tus logs, bloquéala instantáneamente en el firewall.
+
+*   **Configuración del Servidor:**
+    ```yaml
+    "ban-ip":
+      # Bloqueo permanente (DROP)
+      command: "iptables -A INPUT -s {{.Params.target}} -j DROP"
+    ```
+*   **Comando Cliente:**
+    ```bash
+    ghostknock -profile prod -action ban-ip -args "target=192.168.1.55"
+    ```
+
+### 5. Copias de Seguridad: Trigger de Backup de Base de Datos
+Lanza un script de backup bajo demanda antes de una operación arriesgada.
+
+*   **Configuración del Servidor:**
+    ```yaml
+    "db-backup":
+      run_as_user: "postgres" # Ejecutar como usuario de base de datos
+      command: "/usr/local/bin/pg_backup.sh {{.Params.db_name}}"
+      timeout_seconds: 300 # Dar tiempo suficiente (5 min)
+    ```
+*   **Comando Cliente:**
+    ```bash
+    ghostknock -profile prod -action db-backup -args "db_name=clientes_prod"
+    ```
+
+### 6. Gestión de Usuarios: Creación con Credenciales Ocultas
+Crea un usuario de emergencia. El uso de `sensitive_params` asegura que la contraseña nunca quede registrada en texto plano en `/var/log/ghostknockd.log`.
+
+*   **Configuración del Servidor:**
+    ```yaml
+    "create-admin":
+      # Crea usuario, home y asigna password encriptada
+      command: "useradd -m -G sudo -p $(openssl passwd -1 {{.Params.pass}}) {{.Params.user}}"
+      # IMPORTANTE: Oculta 'pass' en los logs
       sensitive_params: ["pass"]
     ```
-*   **Cliente:** `ghostknock ... -action create-user -args "user=bob,pass=S3creto"`
-*   **Log:** `command="[REDACTADO]..." params=map[pass:***** user:bob]`
-
----
+*   **Comando Cliente:**
+    ```bash
+    ghostknock -profile prod -action create-admin -args "user=support_ops,pass=R3scat3_X7z!"
+    ```
+    *Log del servidor:* `Ejecutando comando: [REDACTADO] ... params: {user: support_ops, pass: *****}`
 
 ## ⚙️ Referencia de Configuración Completa (`config.yaml`)
 
@@ -202,7 +314,7 @@ Crea un usuario pasando contraseña. `sensitive_params` la ocultará en `/var/lo
 | **`listener`** | `interface` | string | ✅ | Interfaz de red (ej: `eth0`, `any`). **Requiere restart.** |
 | | `port` | int | ✅ | Puerto UDP. **Requiere restart.** |
 | | `listen_ip` | string | ❌ | Escuchar solo en una IP específica. |
-| **`security`** | `deny_ips` | list | ❌ | Lista negra de IPs o rangos CIDR (ej: `["1.2.3.4", "10.0.0.0/8"]`). Drop instantáneo. |
+| **`security`** | `deny_ips` | list | ❌ | **(v2.1)** Lista negra de IPs o rangos CIDR (ej: `["1.2.3.4", "10.0.0.0/8"]`). Drop instantáneo. |
 | | `replay_window_seconds` | int | ❌ | Ventana de tiempo para aceptar un knock (Default: 5s). |
 | | `rate_limit_per_second` | float | ❌ | Paquetes por segundo por IP (Default: 1.0). |
 | **`users`** | `name` | string | ✅ | Identificador del usuario. |
