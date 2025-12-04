@@ -3,8 +3,8 @@ Version: 2.1.0
 Architecture: amd64
 Maintainer: Soyunomas https://github.com/soyunomas/GhostKnock
 Description: Herramientas cliente para GhostKnock (Solo Cliente).
-Incluye el cliente 'ghostknock' para enviar solicitudes y
-'ghostknock-keygen' para generar identidades criptográficas.
-Este paquete NO incluye el servidor. Ideal para máquinas remotas.
+ Incluye el cliente 'ghostknock' para enviar solicitudes y
+ 'ghostknock-keygen' para generar identidades criptográficas.
+ Este paquete NO incluye el servidor. Ideal para máquinas remotas.
 Conflicts: ghostknock
 Replaces: ghostknock
