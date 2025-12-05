@@ -6,14 +6,18 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 
 ### Added
 - **Sistema de Hooks (Event Driven):** Nueva capacidad para ejecutar scripts externos en puntos clave del ciclo de vida (`pre_execute`, `on_success`, `on_error`, `on_revert`). Permite integraciones avanzadas (notificaciones Telegram/Slack, logs a SIEM) y validaciones personalizadas. El contexto se inyecta mediante variables de entorno (`GK_USER`, `GK_IP`, `GK_STAGE`, `GK_STATUS`).
+- **Configuración de Rendimiento (Tuning):** Nueva sección `tuning` en `config.yaml`. Permite ajustar finamente los buffers de red (`packet_channel_buffer`), el timeout de captura (`pcap_timeout_ms`) y los límites de memoria para el rastreo de IPs (`max_tracked_ips`), permitiendo escalar desde IoT hasta servidores Enterprise.
+- **Logs Estructurados y Flexibles:** Soporte nativo para formato JSON (`log_format: json`) facilitando la ingestión en sistemas SIEM (ELK, Datadog). Además, ahora es posible redirigir los logs a `stdout` (para contenedores/Docker) o `/dev/null` mediante `log_file`.
+- **Personalización del Shell:** Nueva opción en la sección `daemon` para definir el intérprete de comandos (`shell_path`) y sus flags. Permite compatibilidad con sistemas minimalistas (ej. Alpine usando `/bin/ash`) o entornos restringidos.
 - **Perfiles de Cliente (Client Profiles):** Se ha eliminado la necesidad de escribir argumentos largos y repetitivos. El cliente `ghostknock` ahora soporta un archivo de configuración `profiles.yaml` (en `~/.config/ghostknock/` o `%APPDATA%\ghostknock\`) para definir hosts, puertos y claves.
 - **Nuevo Flag `-profile`:** Permite cargar una configuración predefinida por nombre (ej: `ghostknock -profile prod -action restart`). Los flags manuales tienen prioridad sobre el perfil.
-- **Hot Reload (Configuración en Caliente):** Se ha implementado soporte para la señal `SIGHUP`. Ahora es posible recargar la configuración (usuarios, claves, acciones, lista negra, hooks) sin detener el servicio enviando `systemctl reload ghostknockd`. La caché de seguridad se mantiene intacta.
+- **Hot Reload (Configuración en Caliente):** Se ha implementado soporte para la señal `SIGHUP`. Ahora es posible recargar la configuración (usuarios, claves, acciones, lista negra, hooks, logging) sin detener el servicio enviando `systemctl reload ghostknockd`.
 - **Optimización de Defensa (Blacklist):** Nueva directiva `deny_ips` en `security`. Permite definir una lista de IPs o rangos CIDR que serán descartados instantáneamente ("Short-Circuit"). Esto ocurre antes de cualquier operación criptográfica.
 - **Empaquetado (Logrotate):** Se ha añadido configuración automática de `logrotate` en el paquete `.deb`. El log `/var/log/ghostknockd.log` se rota diariamente y se retiene 14 días.
 - **Ejemplos de Configuración:** Se incluye `profiles.yaml.example` en la distribución.
 
 ### Changed
+- **Arquitectura Configurable:** Se han eliminado las constantes de rendimiento "hardcoded" del código fuente. El motor ahora adapta su consumo de recursos dinámicamente según la configuración cargada.
 - **Dependencias del Cliente:** El binario `ghostknock` ahora integra `gopkg.in/yaml.v3` para la gestión de perfiles.
 
 ## [2.0.0]

@@ -14,14 +14,34 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Tuning agrupa constantes de rendimiento configurables para escalar desde IoT hasta Enterprise.
+type Tuning struct {
+	// Requiere RESTART (Memoria estática)
+	PacketChannelBuffer int `yaml:"packet_channel_buffer"` // Default: 100
+
+	// Requiere RESTART (Configuración de Driver/Socket)
+	PcapTimeoutMs int `yaml:"pcap_timeout_ms"` // Default: 300
+
+	// Soporta RELOAD (Lógica dinámica)
+	MaxTrackedIPs             int `yaml:"max_tracked_ips"`              // Default: 20000
+	EvictionBatchSize         int `yaml:"eviction_batch_size"`          // Default: 2000
+	CacheCleanupSeconds       int `yaml:"cache_cleanup_seconds"`        // Default: 60
+	LimiterCleanupSeconds     int `yaml:"limiter_cleanup_seconds"`      // Default: 180
+	LimiterEvictionAgeSeconds int `yaml:"limiter_eviction_age_seconds"` // Default: 300
+}
+
 // Daemon define la configuración del comportamiento del proceso del servidor.
 type Daemon struct {
-	PIDFile string `yaml:"pid_file,omitempty"`
+	PIDFile   string `yaml:"pid_file,omitempty"`
+	ShellPath string `yaml:"shell_path"` // ej: "/bin/sh", "/bin/bash"
+	ShellFlag string `yaml:"shell_flag"` // ej: "-c"
 }
 
 // Logging define la configuración para los registros del servidor.
 type Logging struct {
-	LogLevel string `yaml:"log_level"`
+	LogLevel  string `yaml:"log_level"`
+	LogFile   string `yaml:"log_file"`   // Ruta absoluta, "stdout" o "/dev/null"
+	LogFormat string `yaml:"log_format"` // "text" o "json"
 }
 
 // Hooks define scripts externos que se ejecutan en diferentes puntos del ciclo de vida global.
@@ -83,6 +103,7 @@ type Config struct {
 	Listener             Listener          `yaml:"listener"`
 	Logging              Logging           `yaml:"logging"`
 	Daemon               Daemon            `yaml:"daemon"`
+	Tuning               Tuning            `yaml:"tuning"` // Nuevo: Configuración de rendimiento
 	Security             Security          `yaml:"security"`
 	GlobalHooks          Hooks             `yaml:"hooks"` // Configuración global de Hooks
 	Users                []User            `yaml:"users"`
@@ -180,7 +201,11 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("error al parsear la configuración: %w", err)
 	}
 
-	// Valores por defecto de seguridad
+	// =========================================================================
+	// SANE DEFAULTS (Valores históricos de v2.0 para compatibilidad)
+	// =========================================================================
+
+	// --- Security Defaults ---
 	if cfg.Security.ReplayWindowSeconds == 0 {
 		cfg.Security.ReplayWindowSeconds = 5
 	}
@@ -193,6 +218,50 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.Security.RateLimitBurst == 0 {
 		cfg.Security.RateLimitBurst = 3
 	}
+
+	// --- Tuning Defaults (Performance) ---
+	if cfg.Tuning.PacketChannelBuffer <= 0 {
+		cfg.Tuning.PacketChannelBuffer = 100
+	}
+	if cfg.Tuning.PcapTimeoutMs <= 0 {
+		cfg.Tuning.PcapTimeoutMs = 300
+	}
+	if cfg.Tuning.MaxTrackedIPs <= 0 {
+		cfg.Tuning.MaxTrackedIPs = 20000
+	}
+	if cfg.Tuning.EvictionBatchSize <= 0 {
+		cfg.Tuning.EvictionBatchSize = 2000
+	}
+	if cfg.Tuning.CacheCleanupSeconds <= 0 {
+		cfg.Tuning.CacheCleanupSeconds = 60
+	}
+	if cfg.Tuning.LimiterCleanupSeconds <= 0 {
+		cfg.Tuning.LimiterCleanupSeconds = 180
+	}
+	if cfg.Tuning.LimiterEvictionAgeSeconds <= 0 {
+		cfg.Tuning.LimiterEvictionAgeSeconds = 300
+	}
+
+	// --- Daemon Defaults ---
+	if cfg.Daemon.ShellPath == "" {
+		cfg.Daemon.ShellPath = "/bin/sh"
+	}
+	if cfg.Daemon.ShellFlag == "" {
+		cfg.Daemon.ShellFlag = "-c"
+	}
+
+	// --- Logging Defaults ---
+	if cfg.Logging.LogFile == "" {
+		cfg.Logging.LogFile = "/var/log/ghostknockd.log"
+	}
+	if cfg.Logging.LogFormat == "" {
+		cfg.Logging.LogFormat = "text"
+	}
+	if cfg.Logging.LogLevel == "" {
+		cfg.Logging.LogLevel = "info"
+	}
+
+	// =========================================================================
 
 	// --- PROCESAMIENTO DE LISTA NEGRA (Parseo eficiente) ---
 	cfg.Security.deniedIPMap = make(map[string]struct{})

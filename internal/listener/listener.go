@@ -32,16 +32,24 @@ type PacketInfo struct {
 
 // Start inicia la captura de tráfico.
 // onDrop se ejecuta cuando el canal de procesamiento está lleno (Saturación).
-func Start(ctx context.Context, listenerCfg config.Listener, packetsCh chan<- PacketInfo, onDrop func()) {
+// MODIFICADO (v2.1 FASE 4): Ahora acepta pcapTimeoutMs dinámico.
+func Start(ctx context.Context, listenerCfg config.Listener, pcapTimeoutMs int, packetsCh chan<- PacketInfo, onDrop func()) {
 	defer close(packetsCh)
 
-	slog.Info("Iniciando escucha pasiva (Non-Blocking Mode)", "interface", listenerCfg.Interface, "udp_port", listenerCfg.Port)
+	// Conversión de ms a Duration
+	timeoutDuration := time.Duration(pcapTimeoutMs) * time.Millisecond
+	if timeoutDuration <= 0 {
+		timeoutDuration = 300 * time.Millisecond // Fallback de seguridad
+	}
 
-	const pcapTimeout = 300 * time.Millisecond
+	slog.Info("Iniciando escucha pasiva (Non-Blocking Mode)",
+		"interface", listenerCfg.Interface,
+		"udp_port", listenerCfg.Port,
+		"pcap_timeout", timeoutDuration.String())
 
 	// SEGURIDAD: Modo Promiscuo = false
 	// Solo procesamos paquetes destinados a nuestra MAC/IP. Reduce superficie de ataque y CPU.
-	handle, err := pcap.OpenLive(listenerCfg.Interface, SnapLen, false, pcapTimeout)
+	handle, err := pcap.OpenLive(listenerCfg.Interface, SnapLen, false, timeoutDuration)
 	if err != nil {
 		slog.Error("Error al abrir la interfaz de captura", "interface", listenerCfg.Interface, "error", err)
 		os.Exit(1)
