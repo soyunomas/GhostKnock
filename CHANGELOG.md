@@ -17,6 +17,7 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 - **Ejemplos de Configuración:** Se incluye `profiles.yaml.example` en la distribución.
 
 ### Changed
+- **Optimización de Ejecución (Pre-Compiled Templates):** Se ha refactorizado el motor de ejecución para compilar los templates de comandos (`go templates`) durante la carga de la configuración en lugar de hacerlo en cada petición. Esto elimina la carga de CPU de parseo en la "ruta caliente" y garantiza que el servidor falle al inicio si existen errores de sintaxis en los comandos (Fail-Fast).
 - **Arquitectura Configurable:** Se han eliminado las constantes de rendimiento "hardcoded" del código fuente. El motor ahora adapta su consumo de recursos dinámicamente según la configuración cargada.
 - **Dependencias del Cliente:** El binario `ghostknock` ahora integra `gopkg.in/yaml.v3` para la gestión de perfiles.
 
@@ -27,7 +28,7 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 - **Defensa contra Agotamiento de Memoria (Anti-OOM):** Implementación de límites estrictos (`hard-caps`) en las tablas de rastreo de IPs (`ipLimiters`) con purga automática.
 - **Prevención de "Fork Bomb" (Límite de Procesos):** Se introduce un semáforo de ejecución (`executionSem`) que limita estrictamente el número de comandos concurrentes (default: 10).
 - **Arquitectura de Listener "Fail-Fast" (Anti-Bufferbloat):** El canal de recepción de paquetes se ha reducido y se ha vuelto **No-Bloqueante**.
-- **Cifrado de Extremo a Extremo (Confidencialidad):** Se ha implementado cifrado obligatorio para todo el payload utilizando derivación de claves `X25519`.
+- **Cifrado de Extremo a Extremo (Confidencialidad):** Se ha implementado cifrado obligatorio para todo el payload utilizando derivación de claves `X25519` + `XSalsa20` + `Poly1305`.
 - **Integridad de Datos en Apagado (Graceful Shutdown):** Se han añadido `WaitGroups` para monitorizar los subprocesos de ejecución.
 - **Optimización de Captura (Modo No-Promiscuo):** El servidor ahora procesa estrictamente los paquetes destinados a su propia interfaz de red (MAC/IP).
 - **Sanitización de Logs de Entrada:** Se introduce la directiva `sensitive_params`.

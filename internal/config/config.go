@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/user"
 	"strings"
+	"text/template" // <<-- NUEVO IMPORT
 
 	"gopkg.in/yaml.v3"
 )
@@ -71,14 +72,15 @@ type Action struct {
 	SensitiveParams    []string `yaml:"sensitive_params,omitempty"`
 
 	// --- HOOKS ESPECÍFICOS DE ACCIÓN (v2.2) ---
-	// Hook específico previo a esta acción
-	PreHook string `yaml:"pre_hook,omitempty"`
-
-	// Hook específico posterior a esta acción
-	PostHook string `yaml:"post_hook,omitempty"`
-
-	// Hook específico tras la reversión de esta acción
+	PreHook    string `yaml:"pre_hook,omitempty"`
+	PostHook   string `yaml:"post_hook,omitempty"`
 	RevertHook string `yaml:"revert_hook,omitempty"`
+
+	// --- CAMPOS INTERNOS (OPTIMIZACIÓN v2.1) ---
+	// Estos campos NO se leen del YAML, se generan al cargar la configuración.
+	// Almacenan los templates pre-compilados para evitar parsing en tiempo de ejecución.
+	CommandTmpl       *template.Template `yaml:"-"`
+	RevertCommandTmpl *template.Template `yaml:"-"`
 }
 
 // Security define parámetros de seguridad ajustables.
@@ -284,6 +286,34 @@ func LoadConfig(path string) (*Config, error) {
 
 		return nil, fmt.Errorf("entrada inválida en 'deny_ips': '%s' no es una IP ni un CIDR válido", entry)
 	}
+
+	// --- OPTIMIZACIÓN v2.1: Pre-compilación de Templates ---
+	// Iteramos sobre las acciones para compilar los templates una sola vez al inicio.
+	// Esto ahorra CPU en tiempo de ejecución y permite "Fail-Fast" si la sintaxis es mala.
+	for name, action := range cfg.Actions {
+		// Compilar Comando Principal
+		if action.Command == "" {
+			return nil, fmt.Errorf("la acción '%s' tiene un comando vacío", name)
+		}
+		tmpl, err := template.New("cmd-" + name).Parse(action.Command)
+		if err != nil {
+			return nil, fmt.Errorf("error de sintaxis en el template de la acción '%s': %w", name, err)
+		}
+		action.CommandTmpl = tmpl
+
+		// Compilar Comando de Reversión (si existe)
+		if action.RevertCommand != "" {
+			revTmpl, err := template.New("rev-" + name).Parse(action.RevertCommand)
+			if err != nil {
+				return nil, fmt.Errorf("error de sintaxis en el template de reversión de la acción '%s': %w", name, err)
+			}
+			action.RevertCommandTmpl = revTmpl
+		}
+
+		// Guardar cambios en el mapa (necesario porque 'action' es una copia del valor)
+		cfg.Actions[name] = action
+	}
+
 	// -------------------------------------------------------
 
 	if err := validateConfig(&cfg); err != nil {
@@ -319,7 +349,6 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("el archivo de clave privada del servidor '%s' no existe", cfg.ServerPrivateKeyPath)
 	}
 
-	// Se ha mantenido la corrección anterior de validación de interfaz
 	if cfg.Listener.Interface == "" {
 		return errors.New("el campo 'listener.interface' es obligatorio en la configuración")
 	}

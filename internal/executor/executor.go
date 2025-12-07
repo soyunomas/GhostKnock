@@ -46,24 +46,21 @@ func redactParams(params map[string]string, sensitive []string) map[string]strin
 }
 
 // Execute procesa una acción, valida sus parámetros, la ejecuta y programa su reversión.
-// MODIFICADO (v2.1 FASE 2): Ahora acepta 'daemonCfg' para configurar el Shell dinámicamente.
+// MODIFICADO (v2.1): Usa templates pre-compilados en config.Action para evitar parsing runtime.
 func Execute(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks, daemonCfg config.Daemon) error {
 	// Usamos una versión sanitizada de los parámetros para el log de debug interno
 	safeParams := redactParams(params, action.SensitiveParams)
 	slog.Debug("Iniciando flujo de ejecución", "user", user, "source_ip", sourceIP.String(), "params", safeParams)
 
 	// --- 1. PREPARAR CONTEXTO DE HOOKS ---
-	// Nota: Los hooks reciben los parámetros CRUDOS en variables de entorno (GK_PARAM_X).
-	// Se asume que el script del hook es seguro y confiable.
 	hCtx := HookContext{
 		User:     user,
-		ActionID: "unknown_id", // La struct Action actual no tiene el ID, pero el contexto global sí. (Mejora futura: pasar ID explícito)
+		ActionID: "unknown_id", // La struct Action actual no tiene el ID, pero el contexto global sí.
 		SourceIP: sourceIP.String(),
 		Params:   params,
 	}
 
 	// --- 2. GLOBAL PRE-HOOK (Bloqueante) ---
-	// Si falla, abortamos todo.
 	hCtx.Stage = "global_pre"
 	if err := RunHook(globalHooks.PreExecute, hCtx); err != nil {
 		slog.Warn("Ejecución cancelada por Global Pre-Hook", "user", user)
@@ -78,8 +75,8 @@ func Execute(action config.Action, user string, sourceIP net.IP, params map[stri
 	}
 
 	// --- 4. EJECUCIÓN DEL COMANDO PRINCIPAL ---
-	// Pasamos el shellPath y shellFlag desde la configuración del demonio
-	cmdErr := runCommand("main", action.Command, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams, daemonCfg.ShellPath, daemonCfg.ShellFlag)
+	// Pasamos el Template pre-compilado en lugar de parsearlo aquí.
+	cmdErr := runCommand("main", action.Command, action.CommandTmpl, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams, daemonCfg.ShellPath, daemonCfg.ShellFlag)
 
 	// --- 5. DETERMINAR ESTADO PARA POST-HOOKS ---
 	status := "success"
@@ -93,7 +90,6 @@ func Execute(action config.Action, user string, sourceIP net.IP, params map[stri
 
 	// --- 6. ACTION POST-HOOK (Fire-and-Forget) ---
 	if action.PostHook != "" {
-		// Lanzamos en goroutine para no retrasar la respuesta o el siguiente paso
 		hCtxPost := hCtx
 		hCtxPost.Stage = "action_post"
 		go RunHook(action.PostHook, hCtxPost)
@@ -115,9 +111,7 @@ func Execute(action config.Action, user string, sourceIP net.IP, params map[stri
 	}
 
 	// --- 8. PROGRAMAR REVERSIÓN ---
-	// Si hay un comando de reversión y un retardo, programarlo.
-	if action.RevertCommand != "" && action.RevertDelaySeconds > 0 {
-		// Pasamos los hooks, el usuario y la configuración del demonio a la rutina de reversión
+	if action.RevertCommand != "" && action.RevertDelaySeconds > 0 && action.RevertCommandTmpl != nil {
 		go scheduleRevert(action, user, sourceIP, params, globalHooks, daemonCfg)
 	}
 
@@ -129,7 +123,6 @@ func Execute(action config.Action, user string, sourceIP net.IP, params map[stri
 }
 
 // scheduleRevert espera el tiempo especificado y luego ejecuta el comando de reversión.
-// MODIFICADO (v2.1 FASE 2): Soporte para configuración de Shell.
 func scheduleRevert(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks, daemonCfg config.Daemon) {
 	delay := time.Duration(action.RevertDelaySeconds) * time.Second
 	slog.Info(
@@ -141,8 +134,8 @@ func scheduleRevert(action config.Action, user string, sourceIP net.IP, params m
 
 	slog.Info("Ejecutando reversión", "source_ip", sourceIP.String())
 
-	// Ejecutar comando de reversión usando el shell configurado
-	err := runCommand("revert", action.RevertCommand, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams, daemonCfg.ShellPath, daemonCfg.ShellFlag)
+	// Ejecutar comando de reversión usando el shell configurado y el template compilado
+	err := runCommand("revert", action.RevertCommand, action.RevertCommandTmpl, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams, daemonCfg.ShellPath, daemonCfg.ShellFlag)
 
 	if err != nil {
 		slog.Error(
@@ -153,8 +146,6 @@ func scheduleRevert(action config.Action, user string, sourceIP net.IP, params m
 	}
 
 	// --- HOOKS DE REVERSIÓN ---
-
-	// Preparamos el contexto
 	status := "success"
 	errMsg := ""
 	if err != nil {
@@ -164,7 +155,7 @@ func scheduleRevert(action config.Action, user string, sourceIP net.IP, params m
 
 	hCtx := HookContext{
 		User:     user,
-		ActionID: "revert_unknown", // Idem que en Execute
+		ActionID: "revert_unknown",
 		SourceIP: sourceIP.String(),
 		Params:   params,
 		Status:   status,
@@ -174,7 +165,6 @@ func scheduleRevert(action config.Action, user string, sourceIP net.IP, params m
 	// 1. Action Revert Hook
 	if action.RevertHook != "" {
 		hCtx.Stage = "action_revert"
-		// Ejecutamos síncronamente aquí porque ya estamos en una goroutine separada
 		RunHook(action.RevertHook, hCtx)
 	}
 
@@ -186,8 +176,14 @@ func scheduleRevert(action config.Action, user string, sourceIP net.IP, params m
 }
 
 // runCommand es el núcleo de la ejecución segura.
-// MODIFICADO (v2.1 FASE 2): Parametrización del intérprete de comandos (Shell).
-func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string, sensitiveParams []string, shellPath string, shellFlag string) error {
+// MODIFICADO (v2.1): Acepta `tmpl *template.Template` ya compilado.
+// Mantenemos `commandTemplate` string solo para logs y validación de regex.
+func runCommand(commandType, commandTemplate string, tmpl *template.Template, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string, sensitiveParams []string, shellPath string, shellFlag string) error {
+	
+	if tmpl == nil {
+		return fmt.Errorf("error interno: template no compilado para %s", commandType)
+	}
+
 	// 1. VALIDACIÓN DE SEGURIDAD DE PARÁMETROS (Sanitización Estricta)
 	for key, value := range params {
 		if !safeParamRegex.MatchString(value) {
@@ -199,6 +195,8 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	}
 
 	// 2. VERIFICAR QUE TODOS LOS PARÁMETROS REQUERIDOS EN LA PLANTILLA ESTÁN PRESENTES
+	// Usamos la cadena original para buscar patrones {{.Params.X}}.
+	// Esta es la única operación de regex en tiempo de ejecución que queda, necesaria para seguridad.
 	requiredParams := templateParamRegex.FindAllStringSubmatch(commandTemplate, -1)
 	for _, match := range requiredParams {
 		paramName := match[1] // El primer grupo de captura es el nombre del parámetro.
@@ -216,11 +214,8 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 		Params:   params,
 	}
 
-	tmpl, err := template.New("cmd").Parse(commandTemplate)
-	if err != nil {
-		return fmt.Errorf("error interno al parsear la plantilla de comando: %w", err)
-	}
-
+	// --- OPTIMIZACIÓN: EJECUCIÓN DIRECTA DEL TEMPLATE ---
+	// Ya no hacemos template.New(...).Parse(...). Usamos el tmpl inyectado.
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, templateData); err != nil {
 		return fmt.Errorf("error interno al ejecutar la plantilla de comando: %w", err)
@@ -235,7 +230,7 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 		defer cancel()
 	}
 
-	// MODIFICADO: Uso de shellPath y shellFlag en lugar de constantes hardcoded
+	// Ejecución del Shell
 	cmd := exec.CommandContext(ctx, shellPath, shellFlag, finalCommand)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -262,7 +257,6 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	}
 
 	// --- LÓGICA DE LOGGING SEGURO ---
-	// Si hay parámetros sensibles, NO mostramos el comando final expandido en los logs.
 	logCommandStr := finalCommand
 	if len(sensitiveParams) > 0 {
 		logCommandStr = fmt.Sprintf("[REDACTADO] %s (Valores ocultos por sensitive_params)", commandTemplate)
@@ -270,14 +264,14 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 
 	slog.Info("Ejecutando comando en el shell",
 		"type", commandType,
-		"command", logCommandStr, // Usamos la versión segura
-		"shell", shellPath, // Logueamos qué shell se está usando
+		"command", logCommandStr,
+		"shell", shellPath,
 		"timeout_seconds", timeoutSeconds,
 		"run_as_user", runAsUser,
 		"source_ip", sourceIP.String(),
 	)
 
-	err = cmd.Run()
+	err := cmd.Run()
 
 	if stdout.Len() > 0 {
 		slog.Debug("Comando ejecutado (stdout)", "type", commandType, "output", stdout.String())
@@ -291,7 +285,7 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 			slog.Warn("Comando terminado por timeout",
 				"type", commandType,
 				"timeout_seconds", timeoutSeconds,
-				"command", logCommandStr, // Log seguro
+				"command", logCommandStr,
 			)
 			return fmt.Errorf("el comando excedió el timeout de %d segundos", timeoutSeconds)
 		}
