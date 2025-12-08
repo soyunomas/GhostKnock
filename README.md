@@ -15,8 +15,8 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 ## ✨ Características
 
 *   🛡️ **Invisible por Diseño (Stealth):**
-    *   **Sin Puertos Abiertos:** El servidor no mantiene puertos "a la escucha" en el sentido tradicional. No aparecerá en herramientas de monitorización (como `netstat`) ni responderá a intentos de conexión.
-    *   **Indetectable externamente:** Ante un escaneo de red, el puerto parecerá estar **cerrado** o filtrado. El servidor captura los paquetes de forma pasiva, procesando silenciosamente solo aquellos que son legítimos y descartando el resto sin emitir respuesta.
+    *   **Sin Sockets Abiertos:** El servidor no hace `bind` al puerto en la tabla de procesos del sistema operativo. No aparecerá como "LISTEN" en herramientas modernas como `ss` (Socket Statistics) ni en la antigua `netstat`.
+    *   **Indetectable externamente:** Ante un escaneo de red (Nmap), el puerto parecerá estar **cerrado** o filtrado. El servidor captura los paquetes desde la capa de red (PCAP), procesando silenciosamente solo los legítimos y descartando el resto sin emitir respuesta.
 
 *   🚀 **Monitorización Pasiva y Eficiente:**
     *   **Filtrado en Origen:** GhostKnock aplica filtros a nivel de sistema operativo (BPF). El kernel solo notifica a la aplicación cuando llega un paquete UDP al puerto exacto, garantizando un consumo de CPU prácticamente nulo incluso en redes con mucho tráfico.
