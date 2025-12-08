@@ -56,17 +56,18 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 ## ⚠️ Comportamiento de Seguridad y Limitaciones
 
-GhostKnock ha sido diseñado priorizando la **supervivencia del servidor** sobre la disponibilidad.
+GhostKnock ha sido diseñado bajo la filosofía **"Stealth First"** (Sigilo Primero). El servidor nunca confirma la recepción de un paquete, ni siquiera ante errores de autenticación.
 
-| Limitación | Escenario del Usuario | Comportamiento | Razón de Seguridad |
-| :--- | :--- | :--- | :--- |
-| **Límite de Procesos** | Se intentan lanzar más de 10 comandos simultáneos. | **RECHAZADO.** El servidor ignora el comando. | **Anti-Fork Bomb.** Protege la tabla de procesos del OS. |
-| **Rate Limit (IP)** | Múltiples comandos en < 1 seg desde la misma IP. | **SILENCIO TOTAL.** Se ignoran las ráfagas. | **Anti-DoS.** Protege CPU y Memoria. |
-| **Lista Negra (IP)** | IP presente en `deny_ips` envía tráfico. | **DESCARTE INMEDIATO.** | **Short-Circuit.** Ahorro total de CPU. |
-| **Replay Cache** | Se reenvía un paquete idéntico. | **IGNORADO.** | **Anti-Replay.** Evita reutilización de credenciales. |
-| **Timeout Forzoso** | Un script se cuelga indefinidamente. | **KILL.** Proceso eliminado (default 30s). | **Recuperación de Recursos.** |
-| **Recarga (Reload)** | Se recarga configuración con `SIGHUP`. | **PERSISTE.** La caché de seguridad se mantiene. | **Continuidad.** No se pierden protecciones. |
-
+| Escenario de Ataque / Evento | Comportamiento del Sistema | Razón de Seguridad |
+| :--- | :--- | :--- |
+| **Ataque de Fuerza Bruta (Firma)** | Firma criptográfica inválida. | **SILENCIO TOTAL.** El paquete se descarta. No se generan logs (salvo en debug) para evitar saturación de disco. | **Indetectabilidad.** El atacante no sabe si el servidor existe. |
+| **Fallo de 2FA (TOTP)** | Firma válida, pero código OTP incorrecto o ausente. | **LOG + SILENCIO.** Se registra un `WARN` interno, pero **no se responde** a la red. | **Confidencialidad.** Evita enumeración de usuarios válidos. |
+| **Análisis de Tráfico (Sniffing)** | Monitorización del tamaño de paquetes UDP. | **OFUSCACIÓN.** El cliente inyecta basura aleatoria (0-255 bytes). Todos los paquetes tienen tamaños distintos. | **Anti-Fingerprinting.** Evita deducir qué comando se envió basándose en su longitud. |
+| **Ataque de Repetición (Replay)** | Se reenvía un paquete válido ya procesado. | **DESCARTE INMEDIATO.** La caché de firmas detecta el duplicado. | **Integridad.** Evita la re-ejecución de acciones sensibles. |
+| **Saturación de Memoria (DDoS)** | Se supera `max_tracked_ips` (miles de IPs distintas). | **PURGA CONTROLADA.** El servidor elimina IPs antiguas aleatoriamente para aceptar nuevas. | **Anti-OOM.** El servidor sacrifica precisión de rate-limit para no crashear por falta de RAM. |
+| **Fork Bomb** | Se intentan lanzar >10 comandos simultáneos. | **RECHAZADO.** El semáforo interno bloquea la ejecución. | **Estabilidad del Host.** Protege la tabla de procesos del SO. |
+| **Lista Negra (Blacklist)** | IP presente en `deny_ips` envía tráfico. | **SHORT-CIRCUIT.** Descarte previo a la criptografía. | **Ahorro de CPU.** Evita gastar ciclos de procesador en atacantes conocidos. |
+| **Recarga (Reload)** | `systemctl reload ghostknockd`. | **PERSISTENCIA.** La configuración cambia, pero la caché de seguridad (Replay/Cooldowns) se mantiene. | **Continuidad.** No se abren ventanas de vulnerabilidad durante el cambio. |
 ---
 
 ## 📦 Instalación
