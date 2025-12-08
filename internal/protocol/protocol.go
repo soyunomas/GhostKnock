@@ -5,7 +5,7 @@ package protocol
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha512" // <<-- NUEVA IMPORTACIÓN
+	"crypto/sha512"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +23,7 @@ type Payload struct {
 	Timestamp int64             `json:"timestamp"`
 	ActionID  string            `json:"action_id"`
 	Params    map[string]string `json:"params,omitempty"`
+	Padding   string            `json:"padding,omitempty"` // Ignorado por lógica, usado para entropía (Traffic Obfuscation)
 }
 
 // NewPayload crea una nueva instancia de Payload con la marca de tiempo actual.
@@ -126,7 +127,6 @@ func VerifyAndDecrypt(message []byte, clientPubKey ed25519.PublicKey, serverPriv
 
 // --- INICIO: Conversores de Clave Ed25519 -> Curve25519 ---
 
-// <<-- INICIO: FUNCIÓN CORREGIDA -->>
 func privateKeyToCurve25519(priv ed25519.PrivateKey) [32]byte {
 	// La especificación (RFC 8032) para convertir una clave privada Ed25519 a una
 	// clave secreta X25519 requiere hashear la semilla (los primeros 32 bytes de la
@@ -146,7 +146,6 @@ func privateKeyToCurve25519(priv ed25519.PrivateKey) [32]byte {
 
 	return curveKey
 }
-// <<-- FIN: FUNCIÓN CORREGIDA -->>
 
 func publicKeyToCurve25519(pub ed25519.PublicKey) ([32]byte, bool) {
 	p, err := new(edwards25519.Point).SetBytes(pub)

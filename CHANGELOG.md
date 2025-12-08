@@ -5,6 +5,8 @@ Todos los cambios notables en este proyecto serán documentados en este archivo.
 ## [2.1.0]
 
 ### Added
+- **Ofuscación de Tráfico (Traffic Padding):** Implementación de contramedidas contra el análisis de tráfico (Side-Channel Attacks). El cliente ahora inyecta una cantidad aleatoria de bytes basura (0-255 bytes) en el payload antes del cifrado. Esto hace que el tamaño de los paquetes UDP varíe impredeciblemente.
+- **Autenticación de Segundo Factor (TOTP):** Nueva capa de seguridad opcional por usuario. Se ha añadido el campo `totp_secret` a la configuración de usuarios. Si se define, el servidor exigirá un código OTP válido (compatible con Google Authenticator/Authy) además de la firma criptográfica. La validación es nativa (RFC 6238) sin dependencias externas.
 - **Sistema de Hooks (Event Driven):** Nueva capacidad para ejecutar scripts externos en puntos clave del ciclo de vida (`pre_execute`, `on_success`, `on_error`, `on_revert`). Permite integraciones avanzadas (notificaciones Telegram/Slack, logs a SIEM) y validaciones personalizadas. El contexto se inyecta mediante variables de entorno (`GK_USER`, `GK_IP`, `GK_STAGE`, `GK_STATUS`).
 - **Configuración de Rendimiento (Tuning):** Nueva sección `tuning` en `config.yaml`. Permite ajustar finamente los buffers de red (`packet_channel_buffer`), el timeout de captura (`pcap_timeout_ms`) y los límites de memoria para el rastreo de IPs (`max_tracked_ips`), permitiendo escalar desde IoT hasta servidores Enterprise.
 - **Logs Estructurados y Flexibles:** Soporte nativo para formato JSON (`log_format: json`) facilitando la ingestión en sistemas SIEM (ELK, Datadog). Además, ahora es posible redirigir los logs a `stdout` (para contenedores/Docker) o `/dev/null` mediante `log_file`.

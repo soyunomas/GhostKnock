@@ -6,6 +6,7 @@
 # INSTRUCCIONES BÁSICAS:
 # 1. Copie este archivo: sudo cp config.yaml.example /etc/ghostknock/config.yaml
 # 2. Asegure permisos:   sudo chmod 600 /etc/ghostknock/config.yaml
+# 3. Reinicie servicio:  sudo systemctl restart ghostknockd
 # ==============================================================================
 
 # [OBLIGATORIO] Ruta a la clave privada del servidor (generada con ghostknock-keygen -o server_key).
@@ -61,8 +62,8 @@ daemon:
   # Por defecto: "/bin/sh" con flag "-c".
   # Puede cambiarlo si usa un sistema minimalista (Alpine -> /bin/ash)
   # o si desea restringir la ejecución (ej. /bin/rbash).
-  # shell_path: "/bin/bash"
-  # shell_flag: "-c"
+  shell_path: "/bin/sh"
+  shell_flag: "-c"
 
 # ------------------------------------------------------------------------------
 # 4. TUNING (RENDIMIENTO Y GESTIÓN DE RECURSOS)
@@ -156,6 +157,11 @@ users:
   - name: "admin"
     # [OBLIGATORIO] Clave pública Base64 (salida de ghostknock-keygen).
     public_key: "PEGAR_AQUI_CLAVE_PUBLICA_BASE64..."
+    
+    # [OPCIONAL] Secreto TOTP (Base32) para autenticación de dos factores (2FA).
+    # Si se define, el usuario DEBE enviar el código OTP usando -args "otp=123456".
+    # Compatible con Google Authenticator, Authy, etc.
+    # totp_secret: "JBSWY3DPEHPK3PXP"
     
     # [OBLIGATORIO] Lista de IDs de acciones que este usuario puede solicitar.
     actions: ["open-ssh", "restart-web", "full-update"]

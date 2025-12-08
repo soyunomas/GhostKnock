@@ -10,7 +10,7 @@ import (
 	"os"
 	"os/user"
 	"strings"
-	"text/template" // <<-- NUEVO IMPORT
+	"text/template"
 
 	"gopkg.in/yaml.v3"
 )
@@ -123,6 +123,8 @@ type Listener struct {
 type User struct {
 	Name             string   `yaml:"name"`
 	PublicKeyB64     string   `yaml:"public_key"`
+	// FASE 3: Secreto TOTP (Base32) para autenticación de dos factores.
+	TotpSecret       string   `yaml:"totp_secret,omitempty"`
 	AllowedActions   []string `yaml:"actions"`
 	SourceIPs        []string `yaml:"source_ips,omitempty"`
 	DecodedPublicKey ed25519.PublicKey

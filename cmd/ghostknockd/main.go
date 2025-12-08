@@ -4,6 +4,10 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base32"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +17,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -175,8 +180,6 @@ func main() {
 	}
 
 	// Listener asíncrono
-	// NOTA: Aquí se pasa el timeout definido en configuración.
-	// Esto requiere que el paquete listener se actualice (Fase 4).
 	go listener.Start(ctx, cfg.Listener, cfg.Tuning.PcapTimeoutMs, packetsCh, onDrop)
 
 	// --- WORKER POOL (Crypto) ---
@@ -364,7 +367,6 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	}
 
 	// 2. Rate Limit IP (Anti-DoS ligero)
-	// Pasamos la configuración de tuning actual para gestionar la memoria
 	limiter := s.getLimiter(packetInfo.SourceIP,
 		currentConfig.Security.RateLimitPerSecond,
 		currentConfig.Security.RateLimitBurst,
@@ -409,7 +411,25 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return // Firma inválida o basura
 	}
 
-	// 6. CACHÉ CHECK 2 + STORE (Write Lock - Atómico)
+	// 6. VALIDACIÓN 2FA (TOTP) - FASE 3
+	if authorizedUser.TotpSecret != "" {
+		otpCode, ok := payload.Params["otp"]
+		if !ok || otpCode == "" {
+			slog.Warn("Autenticación fallida: Se requiere código OTP (2FA habilitado)", "user", authorizedUser.Name, "src", packetInfo.SourceIP)
+			return
+		}
+
+		if !validateTOTP(authorizedUser.TotpSecret, otpCode) {
+			slog.Warn("Autenticación fallida: Código OTP inválido", "user", authorizedUser.Name, "src", packetInfo.SourceIP)
+			return
+		}
+
+		// Eliminar OTP de los parámetros para que no se pase al comando/script
+		delete(payload.Params, "otp")
+		slog.Debug("2FA (TOTP) verificado correctamente", "user", authorizedUser.Name)
+	}
+
+	// 7. CACHÉ CHECK 2 + STORE (Write Lock - Atómico)
 	ttl := time.Duration(currentConfig.Security.ReplayWindowSeconds+1) * time.Second
 	expiration := time.Now().Add(ttl)
 
@@ -422,21 +442,21 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	s.signaturesCache[string(sigBytes)] = expiration
 	s.cacheMutex.Unlock()
 
-	// 7. Validación Timestamp del Payload
+	// 8. Validación Timestamp del Payload
 	ts := time.Unix(0, payload.Timestamp)
 	if time.Since(ts) > time.Duration(currentConfig.Security.ReplayWindowSeconds)*time.Second {
 		slog.Warn("Paquete expirado (Timestamp fuera de ventana)", "user", authorizedUser.Name)
 		return
 	}
 
-	// 8. Autorización de Acción y Cooldowns
+	// 9. Autorización de Acción y Cooldowns
 	if !s.checkActionAuthAndCooldown(authorizedUser, payload, packetInfo.SourceIP, currentConfig) {
 		return
 	}
 
 	slog.Info("Knock autorizado, solicitando slot de ejecución", "user", authorizedUser.Name, "action", payload.ActionID)
 
-	// 9. EJECUCIÓN SEGURA
+	// 10. EJECUCIÓN SEGURA
 	select {
 	case s.executionSem <- struct{}{}:
 		s.executionWg.Add(1)
@@ -590,4 +610,51 @@ func (s *Server) startCacheCleaner(ctx context.Context) {
 			s.cacheMutex.Unlock()
 		}
 	}
+}
+
+// validateTOTP verifica un código TOTP basado en el secreto Base32 dado.
+// Implementación mínima de RFC 6238 con ventana de +/- 1 paso (30s).
+func validateTOTP(secret, passcode string) bool {
+	// Limpieza del secreto (eliminar espacios y convertir a mayúsculas)
+	secret = strings.ToUpper(strings.ReplaceAll(secret, " ", ""))
+	
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		// Intentar con padding estándar si falla
+		key, err = base32.StdEncoding.DecodeString(secret)
+		if err != nil {
+			slog.Error("Error decoding TOTP secret", "err", err)
+			return false
+		}
+	}
+
+	// Verificar ventana actual y adyacentes (+/- 1 intervalo de 30s)
+	// Esto ayuda con relojes ligeramente desincronizados.
+	currentInterval := time.Now().Unix() / 30
+	for i := -1; i <= 1; i++ {
+		if generateTOTP(key, currentInterval+int64(i)) == passcode {
+			return true
+		}
+	}
+	return false
+}
+
+// generateTOTP calcula el código HMAC-SHA1 para un intervalo dado.
+func generateTOTP(key []byte, interval int64) string {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, uint64(interval))
+
+	h := hmac.New(sha1.New, key)
+	h.Write(buf)
+	sum := h.Sum(nil)
+
+	offset := sum[len(sum)-1] & 0xf
+	binCode := int64(((int(sum[offset]) & 0x7f) << 24) |
+		((int(sum[offset+1]) & 0xff) << 16) |
+		((int(sum[offset+2]) & 0xff) << 8) |
+		(int(sum[offset+3]) & 0xff))
+
+	code := int(binCode % 1000000)
+	// Formatear a 6 dígitos con ceros a la izquierda
+	return fmt.Sprintf("%06d", code)
 }

@@ -3,9 +3,12 @@ package main
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -133,6 +136,9 @@ func main() {
 		parseArgs(payload, *flagArgs)
 	}
 
+	// --- FASE 2: Traffic Padding (Ofuscación) ---
+	addTrafficPadding(payload)
+
 	// 8. Cifrado y Envío
 	finalMessage, err := protocol.EncryptAndSign(payload, privateKey, serverPubKey)
 	if err != nil {
@@ -143,6 +149,31 @@ func main() {
 }
 
 // --- Funciones Auxiliares ---
+
+// addTrafficPadding rellena el campo Padding con basura aleatoria
+// para variar el tamaño del paquete cifrado final.
+func addTrafficPadding(p *protocol.Payload) {
+	// 1. Decidir longitud aleatoria (0 a 255 bytes)
+	nBig, err := rand.Int(rand.Reader, big.NewInt(256))
+	if err != nil {
+		// Si falla el RNG, continuamos sin padding (fail safe)
+		return
+	}
+	n := int(nBig.Int64())
+
+	if n == 0 {
+		return
+	}
+
+	// 2. Generar bytes aleatorios
+	randomBytes := make([]byte, n)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return
+	}
+
+	// 3. Codificar a String (Base64) para compatibilidad JSON
+	p.Padding = base64.StdEncoding.EncodeToString(randomBytes)
+}
 
 func loadProfile(profileName string) (Profile, error) {
 	configDir, err := os.UserConfigDir()

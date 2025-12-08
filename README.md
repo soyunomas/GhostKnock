@@ -44,6 +44,13 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 *   ⚡ **Perfiles de Cliente:**
     *   El cliente CLI soporta un archivo de configuración (`profiles.yaml`) para definir alias de conexión, evitando tener que escribir IPs y rutas de claves repetidamente.
+    
+*   🎭 **Ofuscación de Tráfico (Traffic Padding):**
+    *   **Anti-Análisis de Tráfico:** El cliente inyecta automáticamente basura aleatoria (0-255 bytes) en cada paquete antes de cifrarlo. Esto hace que el tamaño de los "knocks" varíe constantemente, impidiendo que un observador identifique el comando basándose en el tamaño del paquete UDP.
+
+*   🔐 **Autenticación Reforzada (2FA/TOTP):**
+    *   **Segundo Factor Opcional:** Puedes configurar usuarios "VIP" que requieran un código de un solo uso (Google Authenticator/Authy) además de su clave criptográfica.
+    *   **Validación Nativa:** El servidor valida los códigos RFC 6238 internamente sin depender de servicios externos.
 
 ---
 
@@ -136,13 +143,10 @@ server_private_key_path: "/etc/ghostknock/server_key"
 users:
   - name: "admin"
     public_key: "TU_CLAVE_PUBLICA_BASE64..."
+    # (Opcional) Habilitar 2FA: Genera un secreto Base32 y añádelo aquí.
+    # Si esta línea existe, el servidor exigirá el código OTP.
+    totp_secret: "JBSWY3DPEHPK3PXP" 
     actions: ["open-ssh", "ban-ip"]
-
-actions:
-  "open-ssh":
-    command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
-    revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
-    revert_delay_seconds: 300
 ```
 
 ### 4. Enviar Knock Cifrado
@@ -348,6 +352,23 @@ Crea un usuario de emergencia. El uso de `sensitive_params` asegura que la contr
     ghostknock -profile prod -action create-admin -args "user=support_ops,pass=R3scat3_X7z!"
     ```
     *Log del servidor:* `Ejecutando comando: [REDACTADO] ... params: {user: support_ops, pass: *****}`
+    
+### 7. Seguridad Máxima: Acceso con 2FA (Google Authenticator)
+Si has configurado `totp_secret` en el servidor, debes enviar el código actual usando el argumento reservado `otp`.
+
+*   **Configuración del Servidor:**
+    *(Ver ejemplo en Guía de Inicio Rápido)*
+
+*   **Comando Cliente:**
+    ```bash
+    # Suponiendo que tu app de autenticación muestra el código 592011
+    ghostknock -profile prod -action open-ssh -args "otp=592011"
+    
+    # Combinando parámetros normales con OTP
+    ghostknock -profile prod -action restart-svc -args "svc=nginx,otp=592011"
+    ```
+    
+Aquí tienes la sección completa **## ⚙️ Referencia de Configuración Completa (`config.yaml`)** actualizada con el nuevo campo de 2FA.
 
 ## ⚙️ Referencia de Configuración Completa (`config.yaml`)
 
@@ -358,24 +379,25 @@ Crea un usuario de emergencia. El uso de `sensitive_params` asegura que la contr
 | | `port` | int | ✅ | Puerto UDP. **Requiere restart.** |
 | | `listen_ip` | string | ❌ | Escuchar solo en una IP específica. |
 | **`logging`** | `log_level` | string | ❌ | Nivel: `debug`, `info`, `warn`, `error`. |
-| | `log_file` | string | ❌ | **(v2.1)** Ruta, `stdout` o `/dev/null`. |
-| | `log_format` | string | ❌ | **(v2.1)** `text` o `json`. |
+| | `log_file` | string | ❌ | Ruta, `stdout` o `/dev/null`. |
+| | `log_format` | string | ❌ | `text` o `json`. |
 | **`daemon`** | `pid_file` | string | ❌ | Ruta al archivo PID. |
-| | `shell_path` | string | ❌ | **(v2.1)** Intérprete de comandos (default: `/bin/sh`). |
-| | `shell_flag` | string | ❌ | **(v2.1)** Flag de ejecución (default: `-c`). |
-| **`tuning`** | `packet_channel_buffer` | int | ❌ | **(v2.1)** Buffer de paquetes UDP. **Requiere restart.** |
-| | `pcap_timeout_ms` | int | ❌ | **(v2.1)** Latencia de captura. **Requiere restart.** |
-| | `max_tracked_ips` | int | ❌ | **(v2.1)** Límite de IPs en memoria (Anti-OOM). |
-| | `eviction_batch_size` | int | ❌ | **(v2.1)** IPs a purgar por lote. |
-| **`security`** | `deny_ips` | list | ❌ | **(v2.1)** Lista negra de IPs o rangos CIDR (ej: `["1.2.3.4", "10.0.0.0/8"]`). Drop instantáneo. |
+| | `shell_path` | string | ❌ | Intérprete de comandos (default: `/bin/sh`). |
+| | `shell_flag` | string | ❌ | Flag de ejecución (default: `-c`). |
+| **`tuning`** | `packet_channel_buffer` | int | ❌ | Buffer de paquetes UDP. **Requiere restart.** |
+| | `pcap_timeout_ms` | int | ❌ | Latencia de captura. **Requiere restart.** |
+| | `max_tracked_ips` | int | ❌ | Límite de IPs en memoria (Anti-OOM). |
+| | `eviction_batch_size` | int | ❌ | IPs a purgar por lote. |
+| **`security`** | `deny_ips` | list | ❌ | Lista negra de IPs o rangos CIDR (ej: `["1.2.3.4", "10.0.0.0/8"]`). Drop instantáneo. |
 | | `replay_window_seconds` | int | ❌ | Ventana de tiempo para aceptar un knock (Default: 5s). |
 | | `rate_limit_per_second` | float | ❌ | Paquetes por segundo por IP (Default: 1.0). |
-| **`hooks`** | `pre_execute` | string | ❌ | **(v2.1)** Script a ejecutar antes de la acción. Bloqueante. |
+| **`hooks`** | `pre_execute` | string | ❌ | Script a ejecutar antes de la acción. Bloqueante. |
 | | `on_success` | string | ❌ | Script tras éxito. |
 | | `on_error` | string | ❌ | Script tras error. |
 | | `on_revert` | string | ❌ | Script tras reversión. |
 | **`users`** | `name` | string | ✅ | Identificador del usuario. |
 | | `public_key` | string | ✅ | Clave pública Base64 del cliente. |
+| | `totp_secret` | string | ❌ | Secreto Base32 para 2FA. Si se define, es obligatorio enviar `otp`. |
 | | `actions` | list | ✅ | Lista de IDs de acciones permitidas. |
 | | `source_ips` | list | ❌ | Whitelist de IPs/CIDRs para este usuario. |
 | **`actions`** | `command` | string | ✅ | Comando a ejecutar. Soporta `{{.Params.x}}`. |
