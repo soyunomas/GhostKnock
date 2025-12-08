@@ -20,9 +20,9 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 *   🚀 **Monitorización Pasiva y Eficiente:**
     *   **Filtrado en Origen:** GhostKnock aplica filtros a nivel de sistema operativo (BPF). El kernel solo notifica a la aplicación cuando llega un paquete UDP al puerto exacto, garantizando un consumo de CPU prácticamente nulo incluso en redes con mucho tráfico.
-    *   **Protección Short-Circuit (Nueva v2.1):** Capacidad de definir una lista negra (`deny_ips`) que descarta tráfico de atacantes conocidos *antes* de realizar cualquier operación criptográfica, ahorrando recursos de CPU.
+    *   **Protección Short-Circuit:** Capacidad de definir una lista negra (`deny_ips`) que descarta tráfico de atacantes conocidos *antes* de realizar cualquier operación criptográfica, ahorrando recursos de CPU.
 
-*   🔧 **Tuning y Escalabilidad (Nuevo v2.1):**
+*   🔧 **Tuning y Escalabilidad:**
     *   **Gestión de Recursos:** Sección `tuning` dedicada para ajustar buffers de red, timeouts de captura (`pcap`) y límites de memoria. Permite escalar desde dispositivos IoT (Raspberry Pi) hasta servidores Enterprise con alto tráfico.
     *   **Logging Flexible:** Soporte nativo para logs estructurados en **JSON** (para SIEMs como ELK/Datadog) y redirección a `stdout` o ficheros.
 
@@ -37,7 +37,7 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 *   👮 **Principio de Mínimo Privilegio:**
     *   Puedes configurar comandos para que se ejecuten como usuarios restringidos (ej. `www-data`), limitando el impacto en el sistema.
-    *   **Shell Personalizable (Nuevo v2.1):** Posibilidad de definir el intérprete de comandos (ej. `/bin/ash`, `/bin/rbash`) para entornos minimalistas o restringidos.
+    *   **Shell Personalizable:** Posibilidad de definir el intérprete de comandos (ej. `/bin/ash`, `/bin/rbash`) para entornos minimalistas o restringidos.
 
 *   🔄 **Gestión en Caliente (Hot Reload):**
     *   Permite añadir usuarios, rotar claves, modificar acciones y ajustar parámetros de logging editando la configuración y recargando el servicio (`systemctl reload`) **sin detener el servicio** y manteniendo intacta la caché de seguridad.
