@@ -1,7 +1,7 @@
-# Hoja de Ruta Técnica: Stealth & Hardening (v2.1.0)
+# Hoja de Ruta Técnica: Stealth & Hardening (v2.1.x / v2.2)
 
 ## 🎯 Objetivo
-Implementar capas adicionales de seguridad (2FA, Ofuscación) y flexibilidad operativa sin romper la compatibilidad con el protocolo v2.1.
+Implementar capas adicionales de seguridad (2FA, Ofuscación), flexibilidad operativa y validación estricta sin romper la compatibilidad con el protocolo actual.
 Todas las mejoras deben ser **aditivas**: los clientes y servidores antiguos deben seguir coexistiendo.
 
 ---
@@ -19,51 +19,6 @@ Restringir los privilegios del proceso al mínimo absoluto.
     *   `ProtectHome=true` (El demonio no debe ver `/home`).
     *   `PrivateTmp=true` (Aislamiento de `/tmp`).
 *   **Network:** `RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET` (Prevenir sockets extraños).
-
----
-
-## 📅 FASE 2: Ofuscación de Tráfico (Traffic Padding)
-
-**Objetivo:** Evitar el análisis de tráfico basado en el tamaño del paquete (Side-Channel Attack). Hacer que todos los knocks tengan tamaños variables y aleatorios.
-
-### 2.1. Modificar `internal/protocol/protocol.go`
-*   Actualizar struct `Payload`:
-    ```go
-    type Payload struct {
-        // ... campos existentes ...
-        Padding string `json:"padding,omitempty"` // Ignorado por lógica, usado para entropía
-    }
-    ```
-
-### 2.2. Actualizar Cliente (`cmd/ghostknock`)
-*   Implementar generador de basura aleatoria (random bytes -> hex/base64).
-*   Llenar el campo `Padding` con una longitud aleatoria (ej. entre 0 y 255 bytes) antes de cifrar.
-
-### 2.3. Validación en Servidor
-*   Confirmar que `json.Unmarshal` descarta silenciosamente el campo en servidores antiguos (compatibilidad garantizada).
-*   En servidores nuevos, simplemente ignorar el campo tras descifrar.
-
----
-
-## 📅 FASE 3: Autenticación de Segundo Factor (TOTP)
-
-**Objetivo:** Mitigar el robo de claves privadas requiriendo un código temporal (Google Authenticator).
-
-### 3.1. Actualizar `internal/config/config.go`
-*   Añadir campo opcional a `User`:
-    ```go
-    type User struct {
-        // ...
-        TotpSecret string `yaml:"totp_secret,omitempty"` // Base32 Secret
-    }
-    ```
-
-### 3.2. Actualizar Lógica (`cmd/ghostknockd/main.go` o nuevo middleware)
-*   En `processKnock`, tras verificar la firma criptográfica:
-    1.  Verificar si el usuario tiene `TotpSecret` configurado.
-    2.  Si lo tiene, buscar el parámetro reservado `otp` en `payload.Params`.
-    3.  Validar el código usando una librería estándar (ej. `github.com/pquerna/otp`).
-    4.  Si falla o no existe -> Rechazar silenciosamente.
 
 ---
 
@@ -106,9 +61,36 @@ Permitir arrancar el servidor en modo simulación para verificar configuraciones
 
 ---
 
-## 🧪 Pruebas de Regresión (Checklist)
+## 📅 FASE 6: Validación Granular de Parámetros (Regex Custom)
 
-Para asegurar que v2.2.0 no rompe v2.1.0:
-- [ ] Cliente v2.1 enviando a Servidor v2.2 (Sin Padding, sin TOTP) -> **Debe funcionar.**
-- [ ] Cliente v2.2 enviando a Servidor v2.1 (Con Padding) -> **Debe funcionar** (JSON extra ignorado).
-- [ ] Configuración v2.1 cargada en Servidor v2.2 -> **Debe funcionar** (Campos nuevos opcionales).
+Actualmente, GhostKnock usa una lista blanca estricta (alfanumérica) para los argumentos. Esto impide pasar correos electrónicos, URLs o UUIDs.
+
+### 6.1. Definición de Validadores en Config
+Permitir definir expresiones regulares personalizadas por acción y parámetro.
+
+*   Actualizar `Action` en `config.go`:
+    ```yaml
+    actions:
+      "create-email":
+        command: "/bin/add_mail.sh {{.Params.email}}"
+        # Validadores opcionales por parámetro
+        validators:
+          email: "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,4}$"
+    ```
+*   **Executor:** Si existe un validador para un parámetro, usarlo en lugar de la `safeParamRegex` por defecto.
+
+---
+
+## 📅 FASE 7: Filtrado Geoespacial (GeoIP Hardening)
+
+Para servidores expuestos globalmente, reducir la superficie de ataque bloqueando países enteros antes de la verificación criptográfica.
+
+### 7.1. Integración con Base de Datos MMDB
+*   Añadir soporte (opcional) para leer bases de datos GeoLite2 (MaxMind).
+*   Nueva sección en `config.yaml`:
+    ```yaml
+    security:
+      geoip_db_path: "/var/lib/GeoIP/GeoLite2-Country.mmdb"
+      allow_countries: ["ES", "US", "FR"] # ISO Codes
+    ```
+*   **Listener Middleware:** En `processKnock`, consultar la IP en la DB local. Si el país no está en la lista blanca -> `return` inmediato (Short-circuit).
