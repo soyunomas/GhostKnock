@@ -1,0 +1,26 @@
+# ==============================================================================
+# GHOSTKNOCK CLIENT PROFILES
+# ==============================================================================
+# Ubicación del archivo:
+#   Linux:   ~/.config/ghostknock/profiles.yaml
+#   Windows: %APPDATA%\ghostknock\profiles.yaml
+#
+# Uso: ghostknock -profile casa -action open-ssh
+# ==============================================================================
+
+profiles:
+  # Perfil para el servidor de casa
+  casa:
+    host: "192.168.1.50"
+    port: 3001
+    # Ruta a la clave pública del servidor
+    server_pubkey: "/home/usuario/.config/ghostknock/server_casa.pub"
+    # Ruta a tu clave privada (opcional, si es diferente a la default)
+    key: "/home/usuario/.config/ghostknock/id_ed25519"
+
+  # Perfil para el servidor de producción (AWS/VPS)
+  prod:
+    host: "203.0.113.10"
+    port: 3001
+    server_pubkey: "C:\\Users\\Bob\\Keys\\vps_server.pub"
+    # Windows paths deben usar doble barra invertida o barra normal

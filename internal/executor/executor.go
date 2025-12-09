@@ -46,26 +46,84 @@ func redactParams(params map[string]string, sensitive []string) map[string]strin
 }
 
 // Execute procesa una acción, valida sus parámetros, la ejecuta y programa su reversión.
-func Execute(action config.Action, sourceIP net.IP, params map[string]string) error {
-	// Usamos una versión sanitizada de los parámetros para el log de debug
+// MODIFICADO (v2.1): Usa templates pre-compilados en config.Action para evitar parsing runtime.
+func Execute(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks, daemonCfg config.Daemon) error {
+	// Usamos una versión sanitizada de los parámetros para el log de debug interno
 	safeParams := redactParams(params, action.SensitiveParams)
-	slog.Debug("Ejecutando acción", "source_ip", sourceIP.String(), "params", safeParams)
+	slog.Debug("Iniciando flujo de ejecución", "user", user, "source_ip", sourceIP.String(), "params", safeParams)
 
-	// Ejecutar el comando principal pasando los parámetros
-	if err := runCommand("main", action.Command, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams); err != nil {
-		return fmt.Errorf("falló la ejecución del comando principal: %w", err)
+	// --- 1. PREPARAR CONTEXTO DE HOOKS ---
+	hCtx := HookContext{
+		User:     user,
+		ActionID: "unknown_id", // La struct Action actual no tiene el ID, pero el contexto global sí.
+		SourceIP: sourceIP.String(),
+		Params:   params,
 	}
 
-	// Si hay un comando de reversión y un retardo, programarlo.
-	if action.RevertCommand != "" && action.RevertDelaySeconds > 0 {
-		go scheduleRevert(action, sourceIP, params)
+	// --- 2. GLOBAL PRE-HOOK (Bloqueante) ---
+	hCtx.Stage = "global_pre"
+	if err := RunHook(globalHooks.PreExecute, hCtx); err != nil {
+		slog.Warn("Ejecución cancelada por Global Pre-Hook", "user", user)
+		return fmt.Errorf("action cancelled by Global Pre-Hook")
+	}
+
+	// --- 3. ACTION PRE-HOOK (Bloqueante) ---
+	hCtx.Stage = "action_pre"
+	if err := RunHook(action.PreHook, hCtx); err != nil {
+		slog.Warn("Ejecución cancelada por Action Pre-Hook", "user", user)
+		return fmt.Errorf("action cancelled by Action Pre-Hook")
+	}
+
+	// --- 4. EJECUCIÓN DEL COMANDO PRINCIPAL ---
+	// Pasamos el Template pre-compilado en lugar de parsearlo aquí.
+	cmdErr := runCommand("main", action.Command, action.CommandTmpl, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams, daemonCfg.ShellPath, daemonCfg.ShellFlag)
+
+	// --- 5. DETERMINAR ESTADO PARA POST-HOOKS ---
+	status := "success"
+	errMsg := ""
+	if cmdErr != nil {
+		status = "error"
+		errMsg = cmdErr.Error()
+	}
+	hCtx.Status = status
+	hCtx.ErrorMsg = errMsg
+
+	// --- 6. ACTION POST-HOOK (Fire-and-Forget) ---
+	if action.PostHook != "" {
+		hCtxPost := hCtx
+		hCtxPost.Stage = "action_post"
+		go RunHook(action.PostHook, hCtxPost)
+	}
+
+	// --- 7. GLOBAL POST-HOOKS (Fire-and-Forget) ---
+	if status == "success" {
+		if globalHooks.OnSuccess != "" {
+			hCtxGlobal := hCtx
+			hCtxGlobal.Stage = "global_success"
+			go RunHook(globalHooks.OnSuccess, hCtxGlobal)
+		}
+	} else {
+		if globalHooks.OnError != "" {
+			hCtxGlobal := hCtx
+			hCtxGlobal.Stage = "global_error"
+			go RunHook(globalHooks.OnError, hCtxGlobal)
+		}
+	}
+
+	// --- 8. PROGRAMAR REVERSIÓN ---
+	if action.RevertCommand != "" && action.RevertDelaySeconds > 0 && action.RevertCommandTmpl != nil {
+		go scheduleRevert(action, user, sourceIP, params, globalHooks, daemonCfg)
+	}
+
+	if cmdErr != nil {
+		return fmt.Errorf("falló la ejecución del comando principal: %w", cmdErr)
 	}
 
 	return nil
 }
 
 // scheduleRevert espera el tiempo especificado y luego ejecuta el comando de reversión.
-func scheduleRevert(action config.Action, sourceIP net.IP, params map[string]string) {
+func scheduleRevert(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks, daemonCfg config.Daemon) {
 	delay := time.Duration(action.RevertDelaySeconds) * time.Second
 	slog.Info(
 		"Programando reversión de acción",
@@ -75,18 +133,57 @@ func scheduleRevert(action config.Action, sourceIP net.IP, params map[string]str
 	time.Sleep(delay)
 
 	slog.Info("Ejecutando reversión", "source_ip", sourceIP.String())
-	// Pasamos también los SensitiveParams a la reversión
-	if err := runCommand("revert", action.RevertCommand, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams); err != nil {
+
+	// Ejecutar comando de reversión usando el shell configurado y el template compilado
+	err := runCommand("revert", action.RevertCommand, action.RevertCommandTmpl, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams, daemonCfg.ShellPath, daemonCfg.ShellFlag)
+
+	if err != nil {
 		slog.Error(
 			"Falló la ejecución del comando de reversión",
 			"source_ip", sourceIP.String(),
 			"error", err,
 		)
 	}
+
+	// --- HOOKS DE REVERSIÓN ---
+	status := "success"
+	errMsg := ""
+	if err != nil {
+		status = "error"
+		errMsg = err.Error()
+	}
+
+	hCtx := HookContext{
+		User:     user,
+		ActionID: "revert_unknown",
+		SourceIP: sourceIP.String(),
+		Params:   params,
+		Status:   status,
+		ErrorMsg: errMsg,
+	}
+
+	// 1. Action Revert Hook
+	if action.RevertHook != "" {
+		hCtx.Stage = "action_revert"
+		RunHook(action.RevertHook, hCtx)
+	}
+
+	// 2. Global Revert Hook
+	if globalHooks.OnRevert != "" {
+		hCtx.Stage = "global_revert"
+		RunHook(globalHooks.OnRevert, hCtx)
+	}
 }
 
-// runCommand es el núcleo de la ejecución segura. Ahora acepta sensitiveParams.
-func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string, sensitiveParams []string) error {
+// runCommand es el núcleo de la ejecución segura.
+// MODIFICADO (v2.1): Acepta `tmpl *template.Template` ya compilado.
+// Mantenemos `commandTemplate` string solo para logs y validación de regex.
+func runCommand(commandType, commandTemplate string, tmpl *template.Template, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string, sensitiveParams []string, shellPath string, shellFlag string) error {
+	
+	if tmpl == nil {
+		return fmt.Errorf("error interno: template no compilado para %s", commandType)
+	}
+
 	// 1. VALIDACIÓN DE SEGURIDAD DE PARÁMETROS (Sanitización Estricta)
 	for key, value := range params {
 		if !safeParamRegex.MatchString(value) {
@@ -98,6 +195,8 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	}
 
 	// 2. VERIFICAR QUE TODOS LOS PARÁMETROS REQUERIDOS EN LA PLANTILLA ESTÁN PRESENTES
+	// Usamos la cadena original para buscar patrones {{.Params.X}}.
+	// Esta es la única operación de regex en tiempo de ejecución que queda, necesaria para seguridad.
 	requiredParams := templateParamRegex.FindAllStringSubmatch(commandTemplate, -1)
 	for _, match := range requiredParams {
 		paramName := match[1] // El primer grupo de captura es el nombre del parámetro.
@@ -115,11 +214,8 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 		Params:   params,
 	}
 
-	tmpl, err := template.New("cmd").Parse(commandTemplate)
-	if err != nil {
-		return fmt.Errorf("error interno al parsear la plantilla de comando: %w", err)
-	}
-
+	// --- OPTIMIZACIÓN: EJECUCIÓN DIRECTA DEL TEMPLATE ---
+	// Ya no hacemos template.New(...).Parse(...). Usamos el tmpl inyectado.
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, templateData); err != nil {
 		return fmt.Errorf("error interno al ejecutar la plantilla de comando: %w", err)
@@ -134,7 +230,8 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", finalCommand)
+	// Ejecución del Shell
+	cmd := exec.CommandContext(ctx, shellPath, shellFlag, finalCommand)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -160,7 +257,6 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 	}
 
 	// --- LÓGICA DE LOGGING SEGURO ---
-	// Si hay parámetros sensibles, NO mostramos el comando final expandido en los logs.
 	logCommandStr := finalCommand
 	if len(sensitiveParams) > 0 {
 		logCommandStr = fmt.Sprintf("[REDACTADO] %s (Valores ocultos por sensitive_params)", commandTemplate)
@@ -168,13 +264,14 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 
 	slog.Info("Ejecutando comando en el shell",
 		"type", commandType,
-		"command", logCommandStr, // Usamos la versión segura
+		"command", logCommandStr,
+		"shell", shellPath,
 		"timeout_seconds", timeoutSeconds,
 		"run_as_user", runAsUser,
 		"source_ip", sourceIP.String(),
 	)
 
-	err = cmd.Run()
+	err := cmd.Run()
 
 	if stdout.Len() > 0 {
 		slog.Debug("Comando ejecutado (stdout)", "type", commandType, "output", stdout.String())
@@ -188,7 +285,7 @@ func runCommand(commandType, commandTemplate string, timeoutSeconds int, runAsUs
 			slog.Warn("Comando terminado por timeout",
 				"type", commandType,
 				"timeout_seconds", timeoutSeconds,
-				"command", logCommandStr, // Log seguro
+				"command", logCommandStr,
 			)
 			return fmt.Errorf("el comando excedió el timeout de %d segundos", timeoutSeconds)
 		}

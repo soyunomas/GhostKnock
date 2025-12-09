@@ -1,7 +1,7 @@
 # 👻 GhostKnock
 
 [![Licencia: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/badge/release-v2.0.0-blue.svg)](https://github.com/soyunomas/GhostKnock/releases)
+[![Release](https://img.shields.io/badge/release-v2.1.0-blue.svg)](https://github.com/soyunomas/GhostKnock/releases)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-lightgrey.svg)]()
 
 **GhostKnock** es un sistema de **ejecución remota segura, invisible y confidencial**.
@@ -15,39 +15,59 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 ## ✨ Características
 
 *   🛡️ **Invisible por Diseño (Stealth):**
-    *   **Sin Puertos Abiertos:** El servidor no mantiene puertos "a la escucha" en el sentido tradicional. No aparecerá en herramientas de monitorización (como `netstat`) ni responderá a intentos de conexión.
-    *   **Indetectable externamente:** Ante un escaneo de red, el puerto parecerá estar **cerrado** o filtrado. El servidor captura los paquetes de forma pasiva, procesando silenciosamente solo aquellos que son legítimos y descartando el resto sin emitir respuesta.
+    *   **Sin Sockets Abiertos:** El servidor no hace `bind` al puerto en la tabla de procesos del sistema operativo. No aparecerá como "LISTEN" en herramientas modernas como `ss` (Socket Statistics) ni en la antigua `netstat`.
+    *   **Indetectable externamente:** Ante un escaneo de red (Nmap), el puerto parecerá estar **cerrado** o filtrado. El servidor captura los paquetes desde la capa de red (PCAP), procesando silenciosamente solo los legítimos y descartando el resto sin emitir respuesta.
 
 *   🚀 **Monitorización Pasiva y Eficiente:**
-    *   **Filtrado en Origen:** A diferencia de un *sniffer* convencional que analiza todo el tráfico, GhostKnock aplica filtros a nivel de sistema operativo (BPF). El kernel solo notifica a la aplicación cuando llega un paquete UDP al puerto exacto, garantizando un consumo de CPU prácticamente nulo incluso en redes con mucho tráfico.
+    *   **Filtrado en Origen:** GhostKnock aplica filtros a nivel de sistema operativo (BPF). El kernel solo notifica a la aplicación cuando llega un paquete UDP al puerto exacto, garantizando un consumo de CPU prácticamente nulo incluso en redes con mucho tráfico.
+    *   **Protección Short-Circuit:** Capacidad de definir una lista negra (`deny_ips`) que descarta tráfico de atacantes conocidos *antes* de realizar cualquier operación criptográfica, ahorrando recursos de CPU.
 
-*   🔐 **Seguridad y Privacidad:**
-    *   **Cifrado de Extremo a Extremo:** Utiliza estándares modernos (`Ed25519` + `X25519`) para garantizar dos cosas: que solo tú puedes enviar la orden (autenticación) y que nadie pueda leer qué comando o parámetros estás enviando (confidencialidad).
-    *   **Protección Anti-Replay:** Implementa un mecanismo de "uso único". Si un paquete válido es interceptado y reenviado posteriormente, el servidor lo detectará como duplicado y lo rechazará automáticamente.
+*   🔧 **Tuning y Escalabilidad:**
+    *   **Gestión de Recursos:** Sección `tuning` dedicada para ajustar buffers de red, timeouts de captura (`pcap`) y límites de memoria. Permite escalar desde dispositivos IoT (Raspberry Pi) hasta servidores Enterprise con alto tráfico.
+    *   **Logging Flexible:** Soporte nativo para logs estructurados en **JSON** (para SIEMs como ELK/Datadog) y redirección a `stdout` o ficheros.
+
+*   🔐 **Seguridad y Privacidad (Hardening):**
+    *   **Cifrado de Extremo a Extremo:** Utiliza estándares modernos (`Ed25519` + `X25519`) para autenticación y confidencialidad. Solo el servidor puede leer qué comando estás enviando.
+    *   **Anti-Replay Híbrido:** Sistema de doble verificación (lectura rápida + bloqueo de escritura) que detecta y rechaza paquetes duplicados para evitar la reutilización de credenciales.
+    *   **Memoria Blindada (Anti-OOM):** Arquitectura diseñada para evitar el agotamiento de memoria ante ataques masivos, con purga automática de tablas de rastreo y límites estrictos configurables (`max_tracked_ips`).
+
+*   🪝 **Sistema de Hooks (Event Driven):**
+    *   **Integración y Auditoría:** Ejecuta scripts externos antes (`pre_execute`), después (`on_success`/`on_error`) o al revertir (`on_revert`) una acción.
+    *   **Contexto Inyectado:** Los scripts reciben automáticamente variables de entorno con el usuario, IP, acción y parámetros (`GK_USER`, `GK_IP`, `GK_PARAM_*`). Ideal para notificaciones (Telegram, Slack) o logs centralizados.
 
 *   👮 **Principio de Mínimo Privilegio:**
-    *   Aunque el proceso principal requiere permisos elevados para monitorear la red, tiene la capacidad de **degradar sus privilegios** automáticamente al ejecutar una acción. Puedes configurar comandos para que se ejecuten como usuarios restringidos (ej. `www-data`), limitando el impacto en el sistema.
+    *   Puedes configurar comandos para que se ejecuten como usuarios restringidos (ej. `www-data`), limitando el impacto en el sistema.
+    *   **Shell Personalizable:** Posibilidad de definir el intérprete de comandos (ej. `/bin/ash`, `/bin/rbash`) para entornos minimalistas o restringidos.
 
-*   🧩 **Flexibilidad Operativa:**
-    *   **Parámetros Dinámicos:** Permite inyectar argumentos variables (como direcciones IP, nombres de usuarios o IDs de contenedores) dentro de los comandos del servidor de forma segura, gracias a una validación estricta de caracteres.
+*   🔄 **Gestión en Caliente (Hot Reload):**
+    *   Permite añadir usuarios, rotar claves, modificar acciones y ajustar parámetros de logging editando la configuración y recargando el servicio (`systemctl reload`) **sin detener el servicio** y manteniendo intacta la caché de seguridad.
+
+*   ⚡ **Perfiles de Cliente:**
+    *   El cliente CLI soporta un archivo de configuración (`profiles.yaml`) para definir alias de conexión, evitando tener que escribir IPs y rutas de claves repetidamente.
+    
+*   🎭 **Ofuscación de Tráfico (Traffic Padding):**
+    *   **Anti-Análisis de Tráfico:** El cliente inyecta automáticamente basura aleatoria (0-255 bytes) en cada paquete antes de cifrarlo. Esto hace que el tamaño de los "knocks" varíe constantemente, impidiendo que un observador identifique el comando basándose en el tamaño del paquete UDP.
+
+*   🔐 **Autenticación Reforzada (2FA/TOTP):**
+    *   **Segundo Factor Opcional:** Puedes configurar usuarios "VIP" que requieran un código de un solo uso (Google Authenticator/Authy) además de su clave criptográfica.
+    *   **Validación Nativa:** El servidor valida los códigos RFC 6238 internamente sin depender de servicios externos.
 
 ---
 
 ## ⚠️ Comportamiento de Seguridad y Limitaciones
 
-GhostKnock ha sido diseñado priorizando la **supervivencia del servidor** sobre la disponibilidad. Si el sistema está saturado o detecta anomalías, rechazará peticiones para protegerse.
+GhostKnock ha sido diseñado bajo la filosofía **"Stealth First"** (Sigilo Primero). El servidor nunca confirma la recepción de un paquete, ni siquiera ante errores de autenticación.
 
-| Limitación | Escenario del Usuario | Comportamiento | Razón de Seguridad |
-| :--- | :--- | :--- | :--- |
-| **Límite de Procesos (Semáforo)** | Se intentan lanzar más de 10 comandos simultáneos (ej. múltiples backups o updates). | **RECHAZADO.** El servidor ignora el comando y registra un error. No se encola. | **Anti-Fork Bomb.** Evita el agotamiento de la tabla de procesos del sistema operativo. |
-| **Rate Limit (IP)** | Se envían múltiples comandos en menos de 1 segundo desde la misma IP. | **SILENCIO TOTAL.** A partir del 3º paquete en ráfaga, se ignoran. | **Anti-DoS.** Protege CPU y Memoria contra inundaciones. |
-| **Replay Cache** | Se reenvía un paquete idéntico (mismo nonce/firma) dentro de la ventana de tiempo. | **IGNORADO.** | **Anti-Replay.** Evita la reutilización de credenciales interceptadas. |
-| **Buffer de Red** | Ataque DDoS masivo en curso. Usuario legítimo intenta conectar. | **POSIBLE DESCARTE.** Si el buffer de entrada se llena, se descartan los nuevos paquetes. | **Anti-Latencia.** Preferimos descartar a procesar paquetes viejos (bufferbloat). |
-| **Desincronización Reloj** | El reloj del cliente difiere más de 5s del servidor. | **IGNORADO.** El timestamp es inválido. | **Anti-Replay.** Reduce la ventana de oportunidad de ataque. |
-| **Payload Size** | Se intenta enviar un argumento gigante (>1KB). | **SILENCIO TOTAL.** | **Anti-Allocation DoS.** Previene agotamiento de RAM. |
-| **Timeout Forzoso** | Un script ejecutado se cuelga indefinidamente. | **KILL.** El proceso es eliminado tras el tiempo límite (default 30s). | **Recuperación de Recursos.** Libera los slots de ejecución. |
-| **Reinicio Seguro** | Se detiene el servicio (`stop`) mientras hay comandos corriendo. | **ESPERA.** El servicio espera a que terminen los hijos. | **Integridad de Datos.** Evita corromper operaciones críticas. |
-
+| Escenario de Ataque / Evento | Comportamiento del Sistema | Razón de Seguridad |
+| :--- | :--- | :--- |
+| **Ataque de Fuerza Bruta (Firma)** | Firma criptográfica inválida. | **SILENCIO TOTAL.** El paquete se descarta. No se generan logs (salvo en debug) para evitar saturación de disco. | **Indetectabilidad.** El atacante no sabe si el servidor existe. |
+| **Fallo de 2FA (TOTP)** | Firma válida, pero código OTP incorrecto o ausente. | **LOG + SILENCIO.** Se registra un `WARN` interno, pero **no se responde** a la red. | **Confidencialidad.** Evita enumeración de usuarios válidos. |
+| **Análisis de Tráfico (Sniffing)** | Monitorización del tamaño de paquetes UDP. | **OFUSCACIÓN.** El cliente inyecta basura aleatoria (0-255 bytes). Todos los paquetes tienen tamaños distintos. | **Anti-Fingerprinting.** Evita deducir qué comando se envió basándose en su longitud. |
+| **Ataque de Repetición (Replay)** | Se reenvía un paquete válido ya procesado. | **DESCARTE INMEDIATO.** La caché de firmas detecta el duplicado. | **Integridad.** Evita la re-ejecución de acciones sensibles. |
+| **Saturación de Memoria (DDoS)** | Se supera `max_tracked_ips` (miles de IPs distintas). | **PURGA CONTROLADA.** El servidor elimina IPs antiguas aleatoriamente para aceptar nuevas. | **Anti-OOM.** El servidor sacrifica precisión de rate-limit para no crashear por falta de RAM. |
+| **Fork Bomb** | Se intentan lanzar >10 comandos simultáneos. | **RECHAZADO.** El semáforo interno bloquea la ejecución. | **Estabilidad del Host.** Protege la tabla de procesos del SO. |
+| **Lista Negra (Blacklist)** | IP presente en `deny_ips` envía tráfico. | **SHORT-CIRCUIT.** Descarte previo a la criptografía. | **Ahorro de CPU.** Evita gastar ciclos de procesador en atacantes conocidos. |
+| **Recarga (Reload)** | `systemctl reload ghostknockd`. | **PERSISTENCIA.** La configuración cambia, pero la caché de seguridad (Replay/Cooldowns) se mantiene. | **Continuidad.** No se abren ventanas de vulnerabilidad durante el cambio. |
 ---
 
 ## 📦 Instalación
@@ -58,25 +78,22 @@ Descarga la última versión desde [Releases](https://github.com/soyunomas/Ghost
 
 *   **Para el Servidor (Demonio + Herramientas):**
     ```bash
-    sudo dpkg -i ghostknock_2.0.0_amd64.deb
-    # Se instala el servicio systemd y se asegura el directorio /etc/ghostknock
+    sudo dpkg -i ghostknock_2.1.0_amd64.deb
+    # Se instala el servicio systemd, logrotate y se asegura /etc/ghostknock
     ```
 
 *   **Para Clientes Remotos (Solo Herramientas):**
     ```bash
-    sudo dpkg -i ghostknock-client_2.0.0_amd64.deb
+    sudo dpkg -i ghostknock-client_2.1.0_amd64.deb
     ```
 
 ### Opción B: Ejecutables para Windows
 
-Descarga `ghostknock.exe` y `ghostknock-keygen.exe` desde Releases. No requieren instalación. Úsalos directamente desde PowerShell o CMD.
+Descarga `ghostknock.exe` y `ghostknock-keygen.exe` desde Releases. No requieren instalación.
 
 ### Opción C: Compilación Manual
 
-Requiere Go 1.21+ y `libpcap-dev` (en Linux).
 ```bash
-git clone https://github.com/soyunomas/GhostKnock.git
-cd GhostKnock
 make build          # Compila para Linux
 make build-windows  # Compila .exe para Windows
 ```
@@ -87,295 +104,311 @@ make build-windows  # Compila .exe para Windows
 
 Para que GhostKnock sea verdaderamente invisible, **el sistema operativo no debe responder** cuando reciba un paquete en el puerto UDP configurado.
 
-Si no configuras el firewall, tu servidor Linux responderá con un mensaje ICMP "Port Unreachable", revelando a un atacante que el servidor existe y está activo.
+Si no configuras el firewall, tu servidor Linux responderá con un mensaje ICMP "Port Unreachable", revelando a un atacante que el servidor existe.
 
-Debes configurar tu firewall para **DESCARTAR (DROP/DENY)** explícitamente el tráfico en el puerto de escucha. **GhostKnock seguirá recibiendo los paquetes** porque los captura a bajo nivel (sniffing antes del firewall).
-
-### Si usas UFW (Ubuntu/Debian por defecto)
-Asumiendo que has configurado el puerto `3001` en `config.yaml`:
-
+### Si usas UFW (Ubuntu/Debian)
 ```bash
 # Denegar explícitamente el tráfico UDP en el puerto 3001
 sudo ufw deny 3001/udp
 sudo ufw reload
 ```
-> **Verificación:** Si escaneas el puerto con `nmap -sU -p 3001`, debería aparecer como `open|filtered` (lo ideal) o no responder en absoluto. Nunca debe aparecer como `closed` (que implica respuesta ICMP).
 
 ### Si usas iptables puro
 ```bash
-# Insertar regla para DESCARTAR paquetes, evitando respuesta ICMP.
+# Insertar regla para DESCARTAR paquetes.
 # GhostKnock (libpcap) verá el paquete antes de que iptables lo tire.
 sudo iptables -I INPUT -p udp --dport 3001 -j DROP
-
-# (Opcional) Guardar las reglas para que persistan tras reiniciar
-# sudo netfilter-persistent save  # En Debian/Ubuntu
-# sudo service iptables save      # En CentOS/RHEL
 ```
 
 ---
 
-## 🚀 Guía de Inicio Rápido (Protocolo v2 con Cifrado)
+## 🚀 Guía de Inicio Rápido
 
 ### 1. Generar la Identidad del Servidor (En el Servidor)
-El servidor necesita su propio par de claves para el cifrado.
-
 ```bash
-# Como root en el servidor
 sudo ghostknock-keygen -o /etc/ghostknock/server_key
-# Salida: Claves generadas en /etc/ghostknock/server_key y /etc/ghostknock/server_key.pub
-# ¡Asegura los permisos!
 sudo chmod 600 /etc/ghostknock/server_key*
 ```
-> **Comparte de forma segura el archivo `/etc/ghostknock/server_key.pub` con todos los clientes.**
+> **Comparte `/etc/ghostknock/server_key.pub` con los clientes.**
 
 ### 2. Generar tu Identidad de Cliente (En tu PC)
-Necesitas un par de claves: la privada se queda contigo, la pública va al servidor.
-
 ```bash
-# En tu máquina local (Linux, Mac, Windows)
 ghostknock-keygen
+# Copia la cadena Base64 pública que aparece.
 ```
-> **Copia la cadena Base64 de clave pública que aparece en la terminal.**
 
-### 3. Configurar el Servidor
-Edita el archivo `/etc/ghostknock/config.yaml` y añade dos cosas: la ruta a la clave privada del servidor y los datos de tu usuario cliente.
-
+### 3. Configurar el Servidor (`/etc/ghostknock/config.yaml`)
 ```yaml
-# Indicar al servidor dónde está su propia identidad secreta
 server_private_key_path: "/etc/ghostknock/server_key"
 
 users:
-  - name: "admin_remoto"
-    public_key: "PEGA_TU_CLAVE_PUBLICA_DE_CLIENTE_AQUI..."
-    actions:
-      - "write-test"
-      - "open-ssh"
-
-actions:
-  "write-test":
-    command: 'echo "Test OK. P1={{.Params.p1}} P2={{.Params.p2}}" > /tmp/prueba.txt'
-    cooldown_seconds: 0
+  - name: "admin"
+    public_key: "TU_CLAVE_PUBLICA_BASE64..."
+    # (Opcional) Habilitar 2FA: Genera un secreto Base32 y añádelo aquí.
+    # Si esta línea existe, el servidor exigirá el código OTP.
+    totp_secret: "JBSWY3DPEHPK3PXP" 
+    actions: ["open-ssh", "ban-ip"]
 ```
 
-### 4. Preparar el Cliente
-En tu PC, guarda el archivo `server_key.pub` que te dio el administrador. Por ejemplo, en `~/.config/ghostknock/server.pub`.
-
-### 5. Iniciar el Servicio en el Servidor
+### 4. Enviar Knock Cifrado
 ```bash
-sudo systemctl restart ghostknockd
-```
-
-### 6. Enviar tu primer Knock Cifrado
-Ahora debes especificar la clave pública del servidor para que el cliente sepa cómo cifrar el mensaje.
-
-```bash
-# Linux
-ghostknock -host IP_DEL_SERVIDOR \
-           -server-pubkey ~/.config/ghostknock/server.pub \
-           -action write-test \
-           -args "p1=Hola,p2=Mundo"
-
-# Windows
-.\ghostknock.exe -host IP_DEL_SERVIDOR `
-                 -server-pubkey C:\Users\TuUser\.config\ghostknock\server.pub `
-                 -action write-test `
-                 -args "p1=Hola,p2=Mundo"
+ghostknock -host MISERVIDOR \
+           -server-pubkey server_key.pub \
+           -action open-ssh
 ```
 
 ---
 
-## 💡 Recetario: Ejemplos Prácticos
+## ⚡ Uso Avanzado: Perfiles de Cliente
 
-A continuación se presentan configuraciones para `config.yaml` y el comando del cliente correspondiente.
+Para evitar escribir la IP, puerto y ruta de claves en cada comando, GhostKnock v2.1 introduce los **Perfiles**.
 
-> ⚠️ **IMPORTANTE: Gestión de Timeouts y Corrupción de Datos**
-> Por defecto, GhostKnock mata (`SIGKILL`) cualquier comando que tarde más de **30 segundos** para liberar recursos.
->
-> Para tareas críticas como **actualizaciones de sistema (`apt`), backups o despliegues**, DEBES aumentar el valor de `timeout_seconds` explícitamente. Si el proceso se mata a la mitad, podrías dejar bloqueos de archivos (locks) huérfanos o bases de datos corruptas.
->
-> **Regla de Oro:** Calcula el tiempo máximo que tarda tu comando en el peor escenario y multiplícalo por 2.
+### 1. Crear el archivo de configuración
+Crea un archivo `profiles.yaml` en tu directorio de configuración:
+*   **Linux:** `~/.config/ghostknock/profiles.yaml`
+*   **Windows:** `%APPDATA%\ghostknock\profiles.yaml`
 
-> ⚠️ **Nota de Seguridad sobre Parámetros:**
-> Los argumentos pasados con `-args` solo permiten: **Letras (a-Z), Números (0-9), Puntos (.), Guiones bajos (_) y Guiones medios (-)**.
+```yaml
+profiles:
+  # Perfil para el servidor de casa
+  casa:
+    host: "192.168.1.50"
+    port: 3001
+    server_pubkey: "/home/usuario/.config/ghostknock/server_casa.pub"
+    
+  # Perfil para producción
+  prod:
+    host: "203.0.113.10"
+    port: 3001
+    server_pubkey: "C:\\Keys\\prod_server.pub"
+    key: "C:\\Keys\\id_ed25519_prod" # Clave privada específica para este server
+```
 
-### 1. Test de Verificación (Hola Mundo)
-Crea un archivo para verificar que el sistema procesa parámetros correctamente.
+### 2. Estructura y Uso de Perfiles (`profiles.yaml`)
 
-*   **Config (Server):**
-    ```yaml
-    "write-test":
-      command: 'echo "Este es el parametro1={{.Params.p1}}, parametro2={{.Params.p2}}" > /tmp/prueba.txt'
-      cooldown_seconds: 0
-    ```
-*   **Cliente:**
-    ```bash
-    ghostknock -host 127.0.0.1 -action write-test -args "p1=ValorUno,p2=Valor_Dos" -server-pubkey RUTA_A_SERVER.PUB
-    ```
+El archivo `profiles.yaml` es el corazón de la automatización en el cliente. Permite definir múltiples entornos (Prod, Staging, Home) con sus respectivas claves y puertos.
 
-### 2. Abrir SSH Temporalmente (Port Knocking 2.0)
-Abre el puerto 22 solo para tu IP actual y lo cierra automáticamente tras 5 minutos.
+**Ubicación del archivo:**
+*   🐧 **Linux:** `~/.config/ghostknock/profiles.yaml`
+*   🪟 **Windows:** `%APPDATA%\ghostknock\profiles.yaml`
 
-*   **Config (Server):**
+**Estructura de Campos:**
+
+| Campo | Requerido | Descripción |
+| :--- | :---: | :--- |
+| `host` | ✅ | Dirección IP o dominio del servidor objetivo. |
+| `server_pubkey` | ✅ | Ruta local al archivo `.pub` del servidor (para cifrar el mensaje). |
+| `port` | ❌ | Puerto UDP. Si se omite, usa el **3001** por defecto. |
+| `key` | ❌ | Ruta a tu clave privada. Si se omite, usa la default (`~/.config/ghostknock/id_ed25519`). |
+
+**Ejemplo de uso en terminal:**
+
+```bash
+# 1. Acceso simple usando el perfil 'casa' (usa puerto 3001 y clave default)
+ghostknock -profile casa -action open-ssh
+
+# 2. Acceso a producción (usa puerto custom y clave específica definidos en YAML)
+ghostknock -profile prod -action restart-nginx
+
+# 3. Sobrescribir el host al vuelo (útil para testenar una IP nueva con la misma config)
+ghostknock -profile prod -host 10.0.0.99 -action status
+```
+
+> **Nota de Prioridad:** Los flags manuales (`-host`, `-port`, etc.) siempre tienen preferencia sobre lo definido en el perfil.
+
+---
+
+## 🪝 Integración: Sistema de Hooks
+
+GhostKnock permite definir scripts externos que se ejecutan automáticamente en respuesta a eventos del sistema. Esto es fundamental para auditoría, notificaciones a Slack/Telegram o validaciones complejas.
+
+**Configuración Global (`config.yaml`):**
+
+```yaml
+hooks:
+  # Se ejecuta ANTES de la acción. Si el script sale con error (exit code != 0), 
+  # la acción se cancela y no se ejecuta.
+  pre_execute: "/usr/local/bin/gk_audit.sh"
+  
+  # Se ejecuta tras el éxito del comando principal
+  on_success: "/usr/local/bin/gk_notify.sh"
+  
+  # Se ejecuta si el comando falla
+  on_error: "/usr/local/bin/gk_alert.sh"
+```
+
+**Variables de Entorno Inyectadas:**
+
+Los scripts reciben automáticamente el contexto de ejecución:
+
+| Variable | Descripción |
+| :--- | :--- |
+| `GK_USER` | Nombre del usuario autenticado (ej: `admin`). |
+| `GK_IP` | Dirección IP de origen del knock. |
+| `GK_ACTION` | ID de la acción ejecutada. |
+| `GK_STAGE` | Etapa actual: `global_pre`, `action_post`, `global_success`, `global_error`, `global_revert`. |
+| `GK_STATUS` | Resultado final: `success` o `error`. |
+| `GK_PARAM_*` | Parámetros dinámicos en mayúsculas (ej: `-args "target=1.1.1.1"` -> `GK_PARAM_TARGET`). |
+
+---
+
+## 💡 Recetario: Ejemplos Prácticos para SysAdmins
+
+A continuación, se presentan casos de uso reales para la gestión diaria de infraestructura, detallando la configuración del servidor y el comando exacto del cliente.
+
+### 1. "Port Knocking 2.0": Acceso SSH Temporal
+Abre el puerto 22 **solo para tu IP actual** y lo cierra automáticamente tras 5 minutos. Ideal para mantener el SSH cerrado al mundo.
+
+*   **Configuración del Servidor (`config.yaml`):**
     ```yaml
     "open-ssh":
+      # Inserta regla ACCEPT en la posición 1 para tu IP
       command: "iptables -I INPUT 1 -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
+      # Elimina la regla automáticamente
       revert_command: "iptables -D INPUT -p tcp -s {{.SourceIP}} --dport 22 -j ACCEPT"
       revert_delay_seconds: 300
+      cooldown_seconds: 60
     ```
-*   **Cliente:**
+*   **Comando Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action open-ssh -server-pubkey RUTA_A_SERVER.PUB
+    ghostknock -profile prod -action open-ssh
     ```
 
-### 3. Reiniciar Servicios Específicos
-Reinicia un servicio pasando su nombre como parámetro.
+### 2. Gestión de Servicios: Reinicio Genérico
+Reinicia cualquier servicio de Systemd pasando el nombre como parámetro. Útil para reiniciar Nginx, MySQL o PHP-FPM sin entrar por SSH.
 
-*   **Config (Server):**
+*   **Configuración del Servidor:**
     ```yaml
-    "restart-svc":
-      command: "systemctl restart {{.Params.name}}"
-      # Aumentado a 20s para servicios lentos al arrancar
+    "systemd-restart":
+      # {{.Params.svc}} se sustituye por el argumento.
+      # GhostKnock valida que solo contenga caracteres seguros (a-z, 0-9, -, _).
+      command: "systemctl restart {{.Params.svc}}"
       timeout_seconds: 20
     ```
-*   **Cliente:**
+*   **Comando Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action restart-svc -args "name=nginx" -server-pubkey RUTA_A_SERVER.PUB
+    # Reiniciar Nginx
+    ghostknock -profile prod -action systemd-restart -args "svc=nginx"
+    
+    # Reiniciar Docker
+    ghostknock -profile prod -action systemd-restart -args "svc=docker"
     ```
 
-### 4. Banear IP Atacante (Firewall)
-Si detectas un ataque desde una IP, bloquéala remotamente.
+### 3. Operaciones Docker: Reinicio de Contenedor
+Reinicia un contenedor específico que se ha quedado colgado.
 
-*   **Config (Server):**
-    ```yaml
-    "ban-ip":
-      command: "iptables -A INPUT -s {{.Params.target}} -j DROP"
-    ```
-*   **Cliente:**
-    ```bash
-    ghostknock -host MISERVIDOR -action ban-ip -args "target=192.168.50.5" -server-pubkey RUTA_A_SERVER.PUB
-    ```
-
-### 5. Despliegue Rápido (Git Pull)
-Actualiza el código de una aplicación web para una rama concreta.
-
-*   **Config (Server):**
-    ```yaml
-    "deploy-app":
-      run_as_user: "www-data"
-      command: "cd /var/www/html && git fetch && git checkout {{.Params.branch}} && git pull"
-      # Aumentado a 300s (5 min) por si la red es lenta o hay post-hooks pesados
-      timeout_seconds: 300
-    ```
-*   **Cliente:**
-    ```bash
-    ghostknock -host MISERVIDOR -action deploy-app -args "branch=main" -server-pubkey RUTA_A_SERVER.PUB
-    ```
-
-### 6. Gestión de Contenedores Docker
-Reinicia un contenedor Docker específico.
-
-*   **Config (Server):**
+*   **Configuración del Servidor:**
     ```yaml
     "docker-bounce":
-      command: "docker restart {{.Params.container}}"
-      # Docker puede tardar en detener un contenedor gracefuly
-      timeout_seconds: 60
+      command: "docker restart {{.Params.id}}"
+      timeout_seconds: 45
     ```
-*   **Cliente:**
+*   **Comando Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action docker-bounce -args "container=api-gateway" -server-pubkey RUTA_A_SERVER.PUB
+    ghostknock -profile prod -action docker-bounce -args "id=api-gateway-v2"
     ```
 
-### 7. Modo "Pánico" (Lockdown)
-Cierra todo el tráfico entrante nuevo en caso de emergencia de seguridad.
+### 4. Ciberseguridad: Banear IP Atacante (Active Defense)
+Si detectas un ataque desde una IP en tus logs, bloquéala instantáneamente en el firewall.
 
-*   **Config (Server):**
+*   **Configuración del Servidor:**
     ```yaml
-    "lockdown":
-      command: "iptables -P INPUT DROP"
+    "ban-ip":
+      # Bloqueo permanente (DROP)
+      command: "iptables -A INPUT -s {{.Params.target}} -j DROP"
     ```
-*   **Cliente:**
+*   **Comando Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action lockdown -server-pubkey RUTA_A_SERVER.PUB
+    ghostknock -profile prod -action ban-ip -args "target=192.168.1.55"
     ```
 
-### 8. Wake-on-LAN Proxy
-Enciende una máquina de la red interna.
+### 5. Copias de Seguridad: Trigger de Backup de Base de Datos
+Lanza un script de backup bajo demanda antes de una operación arriesgada.
 
-*   **Config (Server):**
+*   **Configuración del Servidor:**
     ```yaml
-    "wol-pc":
-      command: "wakeonlan {{.Params.mac}}"
+    "db-backup":
+      run_as_user: "postgres" # Ejecutar como usuario de base de datos
+      command: "/usr/local/bin/pg_backup.sh {{.Params.db_name}}"
+      timeout_seconds: 300 # Dar tiempo suficiente (5 min)
     ```
-*   **Cliente:**
+*   **Comando Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action wol-pc -args "mac=aa-bb-cc-dd-ee-ff" -server-pubkey RUTA_A_SERVER.PUB
+    ghostknock -profile prod -action db-backup -args "db_name=clientes_prod"
     ```
 
-### 9. Actualización del Sistema
-Lanza una actualización de paquetes del sistema operativo. **¡CUIDADO CON EL TIMEOUT!**
+### 6. Gestión de Usuarios: Creación con Credenciales Ocultas
+Crea un usuario de emergencia. El uso de `sensitive_params` asegura que la contraseña nunca quede registrada en texto plano en `/var/log/ghostknockd.log`.
 
-*   **Config (Server):**
+*   **Configuración del Servidor:**
     ```yaml
-    "sys-update":
-      # Usar siempre -y para evitar que el comando espere input
-      command: "apt-get update && apt-get upgrade -y"
-      # IMPRESCINDIBLE: 20 minutos. Si se corta antes, 'dpkg' quedará bloqueado.
-      timeout_seconds: 1200
-      cooldown_seconds: 3600
+    "create-admin":
+      # Crea usuario, home y asigna password encriptada
+      command: "useradd -m -G sudo -p $(openssl passwd -1 {{.Params.pass}}) {{.Params.user}}"
+      # IMPORTANTE: Oculta 'pass' en los logs
+      sensitive_params: ["pass"]
     ```
-*   **Cliente:**
+*   **Comando Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action sys-update -server-pubkey RUTA_A_SERVER.PUB
+    ghostknock -profile prod -action create-admin -args "user=support_ops,pass=R3scat3_X7z!"
     ```
+    *Log del servidor:* `Ejecutando comando: [REDACTADO] ... params: {user: support_ops, pass: *****}`
+    
+### 7. Seguridad Máxima: Acceso con 2FA (Google Authenticator)
+Si has configurado `totp_secret` en el servidor, debes enviar el código actual usando el argumento reservado `otp`.
 
-### 10. Creación de Usuario (Con Privacidad)
-Crea un usuario en el sistema pasando la contraseña. Gracias a `sensitive_params`, la contraseña no aparecerá en los logs del sistema.
+*   **Configuración del Servidor:**
+    *(Ver ejemplo en Guía de Inicio Rápido)*
 
-*   **Config (Server):**
-    ```yaml
-    "create-user":
-      command: "useradd -m -p $(openssl passwd -1 {{.Params.password}}) {{.Params.username}}"
-      sensitive_params:
-        - "password"
-    ```
-*   **Cliente:**
+*   **Comando Cliente:**
     ```bash
-    ghostknock -host MISERVIDOR -action create-user -args "username=invitado,password=Secreto.123" -server-pubkey RUTA_A_SERVER.PUB
+    # Suponiendo que tu app de autenticación muestra el código 592011
+    ghostknock -profile prod -action open-ssh -args "otp=592011"
+    
+    # Combinando parámetros normales con OTP
+    ghostknock -profile prod -action restart-svc -args "svc=nginx,otp=592011"
     ```
-*   **Resultado Log:** `command="[REDACTADO] useradd ... (Valores ocultos por sensitive_params)"` y `params=map[password:***** username:invitado]`
-
----
+    
+Aquí tienes la sección completa **## ⚙️ Referencia de Configuración Completa (`config.yaml`)** actualizada con el nuevo campo de 2FA.
 
 ## ⚙️ Referencia de Configuración Completa (`config.yaml`)
 
-Aquí se detallan todas las opciones disponibles para configurar el demonio.
-
 | Sección | Campo | Tipo | Obligatorio | Descripción |
 | :--- | :--- | :--- | :---: | :--- |
-| *(Raíz)* | `server_private_key_path` | string | ✅ | Ruta al archivo de clave privada `ed25519` del servidor, usado para descifrar los payloads. |
-| **`listener`** | `interface` | string | ✅ | Interfaz de red para escuchar (ej: `eth0`, `any`). |
-| | `port` | int | ✅ | Puerto UDP a escuchar (ej: `3001`). |
-| | `listen_ip` | string | ❌ | (Opcional) Si se define, escucha solo en esta IP específica. Por defecto: `""` (Todas). |
-| **`logging`** | `log_level` | string | ✅ | Nivel de log: `debug`, `info`, `warn`, `error`. |
-| **`daemon`** | `pid_file` | string | ❌ | Ruta al archivo PID (ej: `/var/run/ghostknockd.pid`). |
-| **`security`** | *(opcional)* | | | |
-| | `replay_window_seconds` | int | ❌ | Ventana de tiempo (segundos) para aceptar un knock. Aumentar para tolerar desfase horario, pero incrementa riesgo de replay. Por defecto: `5`. |
-| | `default_action_cooldown_seconds` | int | ❌ | Cooldown global (segundos) para acciones sin `cooldown_seconds` propio. Por defecto: `15`. |
-| | `rate_limit_per_second` | float | ❌ | (Avanzado) Paquetes por segundo permitidos por IP para Anti-DoS. Por defecto: `1.0`. |
-| | `rate_limit_burst` | int | ❌ | (Avanzado) Ráfaga de paquetes permitida por IP para Anti-DoS. Por defecto: `3`. |
-| **`users`** | `name` | string | ✅ | Identificador del usuario para los logs. |
-| | `public_key` | string | ✅ | Clave pública `ed25519` en formato Base64. |
-| | `actions` | list | ✅ | Lista de IDs de acciones que este usuario puede ejecutar. |
-| | `source_ips` | list | ❌ | Lista de IPs/CIDRs permitidos (ej: `["192.168.1.50/32"]`). Si está vacío, permite todas. |
-| **`actions`** | *(key)* | string | ✅ | El ID de la acción (debe coincidir con `users.actions`). |
-| | `command` | string | ✅ | Comando de shell a ejecutar. Soporta variables `{{.Params.x}}` y `{{.SourceIP}}`. |
-| | `run_as_user` | string | ❌ | Usuario del sistema que ejecuta el comando. Por defecto: `root` (si el demonio es root). |
-| | `timeout_seconds` | int | ❌ | Tiempo máximo de ejecución. Si se excede, el comando se mata (SIGKILL). |
-| | `cooldown_seconds` | int | ❌ | Tiempo de espera antes de permitir ejecutar esta acción de nuevo. `0` sin cooldown, `-1` usa el global. |
-| | `revert_command` | string | ❌ | Comando que se ejecuta automáticamente tras el retraso. |
-| | `revert_delay_seconds`| int | ❌ | Segundos a esperar antes de ejecutar `revert_command`. |
-| | `sensitive_params` | list | ❌ | Lista de nombres de parámetros que deben ser ocultados (`*****`) en los logs del sistema. |
+| *(Raíz)* | `server_private_key_path` | string | ✅ | Ruta a la clave privada del servidor. |
+| **`listener`** | `interface` | string | ✅ | Interfaz de red (ej: `eth0`, `any`). **Requiere restart.** |
+| | `port` | int | ✅ | Puerto UDP. **Requiere restart.** |
+| | `listen_ip` | string | ❌ | Escuchar solo en una IP específica. |
+| **`logging`** | `log_level` | string | ❌ | Nivel: `debug`, `info`, `warn`, `error`. |
+| | `log_file` | string | ❌ | Ruta, `stdout` o `/dev/null`. |
+| | `log_format` | string | ❌ | `text` o `json`. |
+| **`daemon`** | `pid_file` | string | ❌ | Ruta al archivo PID. |
+| | `shell_path` | string | ❌ | Intérprete de comandos (default: `/bin/sh`). |
+| | `shell_flag` | string | ❌ | Flag de ejecución (default: `-c`). |
+| **`tuning`** | `packet_channel_buffer` | int | ❌ | Buffer de paquetes UDP. **Requiere restart.** |
+| | `pcap_timeout_ms` | int | ❌ | Latencia de captura. **Requiere restart.** |
+| | `max_tracked_ips` | int | ❌ | Límite de IPs en memoria (Anti-OOM). |
+| | `eviction_batch_size` | int | ❌ | IPs a purgar por lote. |
+| **`security`** | `deny_ips` | list | ❌ | Lista negra de IPs o rangos CIDR (ej: `["1.2.3.4", "10.0.0.0/8"]`). Drop instantáneo. |
+| | `replay_window_seconds` | int | ❌ | Ventana de tiempo para aceptar un knock (Default: 5s). |
+| | `rate_limit_per_second` | float | ❌ | Paquetes por segundo por IP (Default: 1.0). |
+| **`hooks`** | `pre_execute` | string | ❌ | Script a ejecutar antes de la acción. Bloqueante. |
+| | `on_success` | string | ❌ | Script tras éxito. |
+| | `on_error` | string | ❌ | Script tras error. |
+| | `on_revert` | string | ❌ | Script tras reversión. |
+| **`users`** | `name` | string | ✅ | Identificador del usuario. |
+| | `public_key` | string | ✅ | Clave pública Base64 del cliente. |
+| | `totp_secret` | string | ❌ | Secreto Base32 para 2FA. Si se define, es obligatorio enviar `otp`. |
+| | `actions` | list | ✅ | Lista de IDs de acciones permitidas. |
+| | `source_ips` | list | ❌ | Whitelist de IPs/CIDRs para este usuario. |
+| **`actions`** | `command` | string | ✅ | Comando a ejecutar. Soporta `{{.Params.x}}`. |
+| | `run_as_user` | string | ❌ | Usuario del sistema que ejecuta el comando. |
+| | `timeout_seconds` | int | ❌ | Tiempo máx antes de matar proceso (Default: 30s). |
+| | `cooldown_seconds` | int | ❌ | Tiempo de espera entre ejecuciones. |
+| | `revert_command` | string | ❌ | Comando de reversión automática. |
+| | `sensitive_params` | list | ❌ | Parámetros a ocultar en los logs (`*****`). |
+| | `pre_hook` | string | ❌ | Hook específico previo a la acción. |
+| | `post_hook` | string | ❌ | Hook específico posterior a la acción. |
 
 ---
 

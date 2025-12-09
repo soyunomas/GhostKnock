@@ -2,35 +2,54 @@
 
 Todos los cambios notables en este proyecto serán documentados en este archivo.
 
-## [Unreleased]
+## [2.1.0]
+
+### Added
+- **Ofuscación de Tráfico (Traffic Padding):** Implementación de contramedidas contra el análisis de tráfico (Side-Channel Attacks). El cliente ahora inyecta una cantidad aleatoria de bytes basura (0-255 bytes) en el payload antes del cifrado. Esto hace que el tamaño de los paquetes UDP varíe impredeciblemente.
+- **Autenticación de Segundo Factor (TOTP):** Nueva capa de seguridad opcional por usuario. Se ha añadido el campo `totp_secret` a la configuración de usuarios. Si se define, el servidor exigirá un código OTP válido (compatible con Google Authenticator/Authy) además de la firma criptográfica. La validación es nativa (RFC 6238) sin dependencias externas.
+- **Sistema de Hooks (Event Driven):** Nueva capacidad para ejecutar scripts externos en puntos clave del ciclo de vida (`pre_execute`, `on_success`, `on_error`, `on_revert`). Permite integraciones avanzadas (notificaciones Telegram/Slack, logs a SIEM) y validaciones personalizadas. El contexto se inyecta mediante variables de entorno (`GK_USER`, `GK_IP`, `GK_STAGE`, `GK_STATUS`).
+- **Configuración de Rendimiento (Tuning):** Nueva sección `tuning` en `config.yaml`. Permite ajustar finamente los buffers de red (`packet_channel_buffer`), el timeout de captura (`pcap_timeout_ms`) y los límites de memoria para el rastreo de IPs (`max_tracked_ips`), permitiendo escalar desde IoT hasta servidores Enterprise.
+- **Logs Estructurados y Flexibles:** Soporte nativo para formato JSON (`log_format: json`) facilitando la ingestión en sistemas SIEM (ELK, Datadog). Además, ahora es posible redirigir los logs a `stdout` (para contenedores/Docker) o `/dev/null` mediante `log_file`.
+- **Personalización del Shell:** Nueva opción en la sección `daemon` para definir el intérprete de comandos (`shell_path`) y sus flags. Permite compatibilidad con sistemas minimalistas (ej. Alpine usando `/bin/ash`) o entornos restringidos.
+- **Perfiles de Cliente (Client Profiles):** Se ha eliminado la necesidad de escribir argumentos largos y repetitivos. El cliente `ghostknock` ahora soporta un archivo de configuración `profiles.yaml` (en `~/.config/ghostknock/` o `%APPDATA%\ghostknock\`) para definir hosts, puertos y claves.
+- **Nuevo Flag `-profile`:** Permite cargar una configuración predefinida por nombre (ej: `ghostknock -profile prod -action restart`). Los flags manuales tienen prioridad sobre el perfil.
+- **Hot Reload (Configuración en Caliente):** Se ha implementado soporte para la señal `SIGHUP`. Ahora es posible recargar la configuración (usuarios, claves, acciones, lista negra, hooks, logging) sin detener el servicio enviando `systemctl reload ghostknockd`.
+- **Optimización de Defensa (Blacklist):** Nueva directiva `deny_ips` en `security`. Permite definir una lista de IPs o rangos CIDR que serán descartados instantáneamente ("Short-Circuit"). Esto ocurre antes de cualquier operación criptográfica.
+- **Empaquetado (Logrotate):** Se ha añadido configuración automática de `logrotate` en el paquete `.deb`. El log `/var/log/ghostknockd.log` se rota diariamente y se retiene 14 días.
+- **Ejemplos de Configuración:** Se incluye `profiles.yaml.example` en la distribución.
+
+### Changed
+- **Optimización de Ejecución (Pre-Compiled Templates):** Se ha refactorizado el motor de ejecución para compilar los templates de comandos (`go templates`) durante la carga de la configuración en lugar de hacerlo en cada petición. Esto elimina la carga de CPU de parseo en la "ruta caliente" y garantiza que el servidor falle al inicio si existen errores de sintaxis en los comandos (Fail-Fast).
+- **Arquitectura Configurable:** Se han eliminado las constantes de rendimiento "hardcoded" del código fuente. El motor ahora adapta su consumo de recursos dinámicamente según la configuración cargada.
+- **Dependencias del Cliente:** El binario `ghostknock` ahora integra `gopkg.in/yaml.v3` para la gestión de perfiles.
 
 ## [2.0.0]
 
 ### Security (Hardening & Architecture)
-- **Protección Anti-Replay Híbrida (Check-Verify-Lock):** Se ha implementado una estrategia de doble verificación. El sistema consulta la caché de lectura rápida (`RLock`) antes de procesar, realiza la validación criptográfica y finalmente adquiere un bloqueo de escritura para evitar condiciones de carrera. Esta arquitectura prioriza la **protección de la memoria RAM** (evitando el envenenamiento de caché con datos basura) sobre el ahorro de CPU, garantizando la estabilidad del servicio bajo carga.
-- **Defensa contra Agotamiento de Memoria (Anti-OOM):** Implementación de límites estrictos (`hard-caps`) en las tablas de rastreo de IPs (`ipLimiters`). Se ha añadido una lógica de **"Purga Parcial Aleatoria"** que elimina el 10% de las entradas más antiguas cuando la tabla se llena, garantizando que el servidor nunca colapse por falta de RAM ante un ataque de *IP Spoofing* masivo.
-- **Prevención de "Fork Bomb" (Límite de Procesos):** Se introduce un semáforo de ejecución (`executionSem`) que limita estrictamente el número de comandos concurrentes (default: 10). Si el servidor recibe más peticiones válidas de las que puede procesar, las rechaza inmediatamente ("Fail-Fast") en lugar de encolarlas, protegiendo la tabla de procesos del sistema operativo.
-- **Arquitectura de Listener "Fail-Fast" (Anti-Bufferbloat):** El canal de recepción de paquetes se ha reducido y se ha vuelto **No-Bloqueante**. Bajo saturación extrema, el listener descarta paquetes silenciosamente en lugar de bloquearse o acumular latencia, priorizando la frescura de los datos (`timestamps`) y la supervivencia del servicio.
-- **Cifrado de Extremo a Extremo (Confidencialidad):** Se ha implementado cifrado obligatorio para todo el payload utilizando derivación de claves `X25519` a partir de la identidad `Ed25519` (vía hashing SHA-512 y clamping). Ahora, la acción y los parámetros enviados son indescifrables para cualquier observador en la red.
-- **Integridad de Datos en Apagado (Graceful Shutdown):** Se han añadido `WaitGroups` para monitorizar los subprocesos de ejecución. El demonio ahora espera a que terminen los scripts críticos (ej. actualizaciones, backups) antes de cerrarse al recibir `SIGTERM`, evitando la corrupción de datos.
-- **Optimización de Captura (Modo No-Promiscuo):** El servidor ahora procesa estrictamente los paquetes destinados a su propia interfaz de red (MAC/IP), ignorando el tráfico ajeno. Esto mantiene la invisibilidad (Stealth) y reduce el consumo de CPU al no procesar ruido de broadcast/multicast.
-- **Sanitización de Logs de Entrada:** Se introduce la directiva `sensitive_params`. Los parámetros de entrada marcados serán sustituidos por `*****` en los registros del sistema antes de ser procesados, reduciendo el riesgo de exposición de secretos en disco.
-- **Optimización de Heap (Zero-Allocation):** Se ha optimizado el acceso a los mapas de caché utilizando conversiones directas de punteros en las búsquedas, evitando que el Garbage Collector se sature limpiando miles de strings temporales durante un ataque.
+- **Protección Anti-Replay Híbrida (Check-Verify-Lock):** Se ha implementado una estrategia de doble verificación. El sistema consulta la caché de lectura rápida (`RLock`) antes de procesar, realiza la validación criptográfica y finalmente adquiere un bloqueo de escritura.
+- **Defensa contra Agotamiento de Memoria (Anti-OOM):** Implementación de límites estrictos (`hard-caps`) en las tablas de rastreo de IPs (`ipLimiters`) con purga automática.
+- **Prevención de "Fork Bomb" (Límite de Procesos):** Se introduce un semáforo de ejecución (`executionSem`) que limita estrictamente el número de comandos concurrentes (default: 10).
+- **Arquitectura de Listener "Fail-Fast" (Anti-Bufferbloat):** El canal de recepción de paquetes se ha reducido y se ha vuelto **No-Bloqueante**.
+- **Cifrado de Extremo a Extremo (Confidencialidad):** Se ha implementado cifrado obligatorio para todo el payload utilizando derivación de claves `X25519` + `XSalsa20` + `Poly1305`.
+- **Integridad de Datos en Apagado (Graceful Shutdown):** Se han añadido `WaitGroups` para monitorizar los subprocesos de ejecución.
+- **Optimización de Captura (Modo No-Promiscuo):** El servidor ahora procesa estrictamente los paquetes destinados a su propia interfaz de red (MAC/IP).
+- **Sanitización de Logs de Entrada:** Se introduce la directiva `sensitive_params`.
+- **Optimización de Heap (Zero-Allocation):** Se ha optimizado el acceso a los mapas de caché.
 
 ### Added
 - **Identidad Propia del Servidor:** El demonio `ghostknockd` ahora requiere su propio par de claves Ed25519 especificado en `server_private_key_path`.
 - **Validación de Configuración Avanzada:** Flag `-t` para validar exhaustivamente el archivo de configuración.
 - **Transparencia de Versión:** Flag `-version` en todos los binarios.
-- **Visibilidad Operativa:** Sistema de métricas internas ("Heartbeat") que reporta estadísticas de paquetes procesados y descartados cada 10 segundos, permitiendo detectar saturación sin inundar los logs de disco.
+- **Visibilidad Operativa:** Sistema de métricas internas ("Heartbeat").
 
 ### Changed
 - **BREAKING CHANGE: Protocolo de Red v2:** Incompatible con v1 debido al cifrado obligatorio.
 - **BREAKING CHANGE: Nuevo Flag de Cliente:** `ghostknock` ahora requiere `-server-pubkey`.
 - **BREAKING CHANGE: Configuración:** `config.yaml` requiere `server_private_key_path`.
-- **Timeout Forzoso:** Se aplica un timeout de seguridad por defecto (30s) a cualquier acción que no tenga uno definido explícitamente.
+- **Timeout Forzoso:** Se aplica un timeout de seguridad por defecto (30s).
 
 ### Fixed
-- **Bug Lógico en Limpieza de Cooldowns:** Se corrigió un error donde el recolector de basura eliminaba registros de cooldowns largos (>1h) antes de tiempo. Se ha ampliado la ventana de retención a 24h.
+- **Bug Lógico en Limpieza de Cooldowns:** Se corrigió un error donde el recolector de basura eliminaba registros de cooldowns largos antes de tiempo.
 - **Herencia de Cooldown:** Corregido error donde omitir `cooldown_seconds` desactivaba el enfriamiento.
 
 ## [1.1.0]
