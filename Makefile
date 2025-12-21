@@ -1,4 +1,4 @@
-# Makefile para el proyecto GhostKnock v2.1.0
+# Makefile para el proyecto GhostKnock v2.2.0
 
 # ==============================================================================
 # Variables de Configuración
@@ -7,11 +7,15 @@
 GO ?= go
 GOFLAGS ?= -v
 
+# --- Variables de Entorno de Compilación ---
+# CGO_ENABLED=0: Asegura un binario estático puro (sin dependencia de libc/libpcap)
+ENV_VARS := CGO_ENABLED=0
+
 # --- Variables para el empaquetado DEB ---
-VERSION := 2.1.0
+VERSION := 2.2.0
 ARCH := $(shell dpkg --print-architecture)
-# Inyectamos la versión en tiempo de compilación para los flags -version
-LDFLAGS_VERSION := -ldflags="-X main.version=$(VERSION)"
+# -s -w: Elimina símbolos de depuración para reducir tamaño del binario
+LDFLAGS_VERSION := -ldflags="-s -w -X main.version=$(VERSION)"
 
 # Definición de Binarios
 SERVER_BIN := ghostknockd
@@ -58,7 +62,7 @@ build-linux: $(ALL_BINS)
 
 $(ALL_BINS):
 	@echo "🔨 Compilando $@ (Linux/$(ARCH)) con versión $(VERSION)..."
-	@$(GO) build $(GOFLAGS) $(LDFLAGS_VERSION) -o $@ ./cmd/$@/
+	@$(ENV_VARS) $(GO) build $(GOFLAGS) $(LDFLAGS_VERSION) -o $@ ./cmd/$@/
 
 # 🪟 Windows (Cross-Compilation)
 # Go permite compilar para Windows desde Linux simplemente configurando GOOS=windows.
@@ -68,7 +72,7 @@ build-windows: $(WINDOWS_BINS)
 # Regla de patrón para ejecutables de Windows
 %.exe:
 	@echo "🔨 Compilando $@ (Windows/amd64) con versión $(VERSION)..."
-	@GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) $(LDFLAGS_VERSION) -o $@ ./cmd/$(basename $@)/
+	@$(ENV_VARS) GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) $(LDFLAGS_VERSION) -o $@ ./cmd/$(basename $@)/
 
 # ==============================================================================
 # Reglas de Empaquetado .DEB
@@ -103,7 +107,6 @@ package-deb-server: $(ALL_BINS)
 	@install -m 0644 packaging/logrotate/ghostknockd $(BUILD_DIR)/server$(LOGROTATEDIR)/ghostknockd
 	
 	# SEGURIDAD: El directorio de configuración debe ser inaccesible para otros.
-	# Esto asegura que en el .deb el directorio tenga permisos restrictivos.
 	@chmod 700 $(BUILD_DIR)/server$(ETCDIR)
 
 	# Construcción
@@ -126,7 +129,6 @@ package-deb-client: $(CLIENT_BINS)
 	@install -m 0755 $(CLIENT_BINS) $(BUILD_DIR)/client$(BINDIR)/
 
 	# Archivos de Ejemplo (Perfiles)
-	# Se deja en /etc/ghostknock/profiles.yaml.example para referencia
 	@install -m 0644 profiles.yaml.example $(BUILD_DIR)/client$(ETCDIR)/profiles.yaml.example
 	
 	# Construcción
@@ -153,9 +155,7 @@ install: build-linux
 	@install -d -m 0700 $(ETCDIR)
 	
 	@install -m 0755 $(ALL_BINS) $(BINDIR)
-	# El archivo de ejemplo también restringido, por si acaso.
 	@install -m 0600 config.yaml $(ETCDIR)/config.yaml.example
-	# Instalamos el ejemplo de perfiles también
 	@install -m 0644 profiles.yaml.example $(ETCDIR)/profiles.yaml.example
 
 	@install -m 0644 packaging/systemd/ghostknockd.service $(SYSTEMDDIR)/ghostknockd.service
@@ -176,7 +176,7 @@ help:
 	@echo "GhostKnock v$(VERSION) Makefile"
 	@echo ""
 	@echo "Compilación:"
-	@echo "  make build-linux        - Compila binarios nativos (Linux)."
+	@echo "  make build-linux        - Compila binarios nativos (Linux) [STATIC, NO CGO]."
 	@echo "  make build-windows      - Compila binarios .exe para Windows."
 	@echo "  make all                - Compila ambas plataformas."
 	@echo ""

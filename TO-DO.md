@@ -13,12 +13,33 @@ Mejorar la seguridad del proceso demonio utilizando las capacidades de aislamien
 ### 1.1. Actualizar `packaging/systemd/ghostknockd.service`
 Restringir los privilegios del proceso al mínimo absoluto.
 
-*   **Capabilities:** Limitar a `CAP_NET_RAW` (para sniffing) y `CAP_SETUID/GID` (para cambiar de usuario).
-*   **Filesystem:**
+*   [ ] **Capabilities:** Limitar a `CAP_NET_RAW` (para sniffing) y `CAP_SETUID/GID` (para cambiar de usuario).
+*   [ ] **Filesystem:**
     *   `ProtectSystem=strict` (Montar `/usr`, `/boot`, `/etc` como Read-Only).
     *   `ProtectHome=true` (El demonio no debe ver `/home`).
     *   `PrivateTmp=true` (Aislamiento de `/tmp`).
-*   **Network:** `RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET` (Prevenir sockets extraños).
+*   [ ] **Network:** `RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET` (Prevenir sockets extraños).
+
+---
+
+## 📅 FASE 2: Optimización Core "Iron Lung" (v2.2 - Completado)
+
+Migración del motor de captura para eliminar deuda técnica y dependencias de C.
+
+*   [x] **Migración a AF_PACKET:** Reemplazo de `libpcap` por sockets nativos de Linux (`mdlayher/packet`).
+*   [x] **Eliminación de CGo:** El binario ahora es 100% estático (`CGO_ENABLED=0`).
+*   [x] **Parser Zero-Copy:** Implementación de un decodificador manual de paquetes para evitar asignaciones de memoria en el bucle caliente.
+*   [x] **Soporte VLAN (802.1Q):** Detección automática de tráfico etiquetado.
+
+---
+
+## 📅 FASE 3: Seguridad de Aplicación (v2.1 - Completado)
+
+Implementación de capas de seguridad lógica y contra análisis de tráfico.
+
+*   [x] **2FA / TOTP:** Implementación de segundo factor de autenticación compatible con Google Authenticator (RFC 6238).
+*   [x] **Traffic Padding:** Ofuscación de tráfico mediante inyección de basura aleatoria (0-255 bytes) para evitar análisis por tamaño de paquete.
+*   [x] **Hot Reload:** Soporte para recarga de configuración en caliente (`SIGHUP`).
 
 ---
 
@@ -27,23 +48,23 @@ Restringir los privilegios del proceso al mínimo absoluto.
 ### 4.1. Acciones Multi-Comando (`internal/config`)
 Permitir que una sola acción ejecute varios comandos secuenciales.
 
-*   **Reto:** Mantener compatibilidad con `command: "string"`.
-*   **Solución:** Implementar `UnmarshalYAML` personalizado para `Action`.
+*   [ ] **Reto:** Mantener compatibilidad con `command: "string"`.
+*   [ ] **Solución:** Implementar `UnmarshalYAML` personalizado para `Action`.
     *   Si el nodo YAML es string -> Convertir a `[]string{val}`.
     *   Si el nodo es lista -> Usar tal cual.
-*   **Executor:** Actualizar `executor.go` para iterar sobre la lista de comandos. Si uno falla, detener la cadena.
+*   [ ] **Executor:** Actualizar `executor.go` para iterar sobre la lista de comandos. Si uno falla, detener la cadena.
 
 ### 4.2. Control Horario (Time-Based Access)
 Restringir el acceso a ciertos usuarios por horario.
 
-*   Actualizar `User` en `config.go`:
+*   [ ] Actualizar `User` en `config.go`:
     ```go
     type User struct {
         // ...
         AllowedHours []string `yaml:"allowed_hours,omitempty"` // Ej: "09:00-17:00"
     }
     ```
-*   Implementar validador de tiempo en el servidor antes de ejecutar la acción.
+*   [ ] Implementar validador de tiempo en el servidor antes de ejecutar la acción.
 
 ---
 
@@ -52,9 +73,9 @@ Restringir el acceso a ciertos usuarios por horario.
 ### 5.1. Flag `-dry-run`
 Permitir arrancar el servidor en modo simulación para verificar configuraciones de firewall complejas sin riesgo.
 
-*   Añadir flag en `main.go`.
-*   Inyectar este estado en `executor.Execute`.
-*   Si `dryRun == true`:
+*   [ ] Añadir flag en `main.go`.
+*   [ ] Inyectar este estado en `executor.Execute`.
+*   [ ] Si `dryRun == true`:
     *   No ejecutar `exec.Command`.
     *   Loguear: `[DRY-RUN] WOULDA EXECUTED: iptables -I INPUT...`
     *   No ejecutar reversiones reales, solo simular el delay.
@@ -68,7 +89,7 @@ Actualmente, GhostKnock usa una lista blanca estricta (alfanumérica) para los a
 ### 6.1. Definición de Validadores en Config
 Permitir definir expresiones regulares personalizadas por acción y parámetro.
 
-*   Actualizar `Action` en `config.go`:
+*   [ ] Actualizar `Action` en `config.go`:
     ```yaml
     actions:
       "create-email":
@@ -77,7 +98,7 @@ Permitir definir expresiones regulares personalizadas por acción y parámetro.
         validators:
           email: "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,4}$"
     ```
-*   **Executor:** Si existe un validador para un parámetro, usarlo en lugar de la `safeParamRegex` por defecto.
+*   [ ] **Executor:** Si existe un validador para un parámetro, usarlo en lugar de la `safeParamRegex` por defecto.
 
 ---
 
@@ -86,11 +107,11 @@ Permitir definir expresiones regulares personalizadas por acción y parámetro.
 Para servidores expuestos globalmente, reducir la superficie de ataque bloqueando países enteros antes de la verificación criptográfica.
 
 ### 7.1. Integración con Base de Datos MMDB
-*   Añadir soporte (opcional) para leer bases de datos GeoLite2 (MaxMind).
-*   Nueva sección en `config.yaml`:
+*   [ ] Añadir soporte (opcional) para leer bases de datos GeoLite2 (MaxMind).
+*   [ ] Nueva sección en `config.yaml`:
     ```yaml
     security:
       geoip_db_path: "/var/lib/GeoIP/GeoLite2-Country.mmdb"
       allow_countries: ["ES", "US", "FR"] # ISO Codes
     ```
-*   **Listener Middleware:** En `processKnock`, consultar la IP en la DB local. Si el país no está en la lista blanca -> `return` inmediato (Short-circuit).
+*   [ ] **Listener Middleware:** En `processKnock`, consultar la IP en la DB local. Si el país no está en la lista blanca -> `return` inmediato (Short-circuit).

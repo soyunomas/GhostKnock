@@ -10,8 +10,6 @@ import (
 	"net"
 	"os/exec"
 	"os/user"
-	"strconv"
-	"syscall"
 	"text/template"
 	"time"
 
@@ -257,18 +255,13 @@ func runCommand(commandType, commandTemplate string, tmpl *template.Template, ti
 			return fmt.Errorf("error crítico en tiempo de ejecución: no se pudo encontrar el usuario '%s': %w", runAsUser, err)
 		}
 
-		uid, err := strconv.ParseUint(u.Uid, 10, 32)
-		if err != nil {
-			return fmt.Errorf("no se pudo parsear el UID '%s' para el usuario '%s': %w", u.Uid, runAsUser, err)
+		// --- MODIFICACIÓN QUIRÚRGICA AQUÍ ---
+		// Reemplazamos la lógica directa de syscall por la función abstracta setCredentials
+		// Esto permite que compile en Windows (usando el stub) y en Linux (usando syscall real)
+		if err := setCredentials(cmd, u); err != nil {
+			return fmt.Errorf("error al establecer credenciales para '%s': %w", runAsUser, err)
 		}
-
-		gid, err := strconv.ParseUint(u.Gid, 10, 32)
-		if err != nil {
-			return fmt.Errorf("no se pudo parsear el GID '%s' para el usuario '%s': %w", u.Gid, runAsUser, err)
-		}
-
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
+		// ------------------------------------
 	}
 
 	// --- LÓGICA DE LOGGING SEGURO ---

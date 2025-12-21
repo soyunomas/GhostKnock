@@ -1,11 +1,12 @@
 Package: ghostknock
-Version: 2.1.0
+Version: 2.2.0
 Architecture: amd64
 Maintainer: Soyunomas https://github.com/soyunomas/GhostKnock
-Description: Un demonio de port knocking seguro y criptográfico (Suite Completa).
+Description: Un demonio de port knocking seguro, criptográfico y nativo (Suite Completa).
  GhostKnock es una reimplementación moderna del concepto de port knocking
  que utiliza criptografía de clave pública.
+ Esta versión utiliza un motor de captura nativo en Go (AF_PACKET)
+ eliminando la necesidad de librerías C externas.
  Este paquete instala el SERVIDOR (ghostknockd) y el CLIENTE (ghostknock).
-Depends: libpcap0.8
 Conflicts: ghostknock-client
 Replaces: ghostknock-client

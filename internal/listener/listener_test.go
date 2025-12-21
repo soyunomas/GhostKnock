@@ -1,58 +1,138 @@
+//go:build linux
+
 package listener
 
 import (
-	"net" // <<-- Faltaba este import
+	"bytes"
+	"encoding/binary"
+	"net"
 	"testing"
-
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 )
 
-// FuzzExtractPacketInfo bombardea la función de extracción con datos aleatorios.
-func FuzzExtractPacketInfo(f *testing.F) {
-	// 1. Añadimos casos semilla (corpus)
-	f.Add([]byte("payload_corto_valido"))
-	f.Add(make([]byte, 2000)) // Payload que excede el límite
+// constructPacket es un helper para fabricar paquetes raw para testing sin usar gopacket
+func constructPacket(ethType uint16, vlanID int, proto uint8, srcIP, dstIP net.IP, dstPort int, payload []byte) []byte {
+	buf := new(bytes.Buffer)
 
-	f.Fuzz(func(t *testing.T, payloadData []byte) {
-		// Construimos un paquete falso usando gopacket
-		// Simulamos un paquete UDP sobre IPv4
-		buf := gopacket.NewSerializeBuffer()
-		opts := gopacket.SerializeOptions{}
-		
-		eth := &layers.Ethernet{
-			SrcMAC:       net.HardwareAddr{0xff, 0xaa, 0xfa, 0xaa, 0xff, 0xaa},
-			DstMAC:       net.HardwareAddr{0xbd, 0xbd, 0xbd, 0xbd, 0xbd, 0xbd},
-			EthernetType: layers.EthernetTypeIPv4,
-		}
-		ip := &layers.IPv4{
-			SrcIP:    net.IP{192, 168, 1, 1},
-			DstIP:    net.IP{192, 168, 1, 2},
-			Protocol: layers.IPProtocolUDP,
-			Version:  4,
-		}
-		udp := &layers.UDP{
-			SrcPort: 1234,
-			DstPort: 3001,
-		}
-		
-		// El Fuzzer controla el contenido de 'payloadData'
-		err := gopacket.SerializeLayers(buf, opts, eth, ip, udp, gopacket.Payload(payloadData))
-		if err != nil {
-			return
-		}
+	// --- ETHERNET ---
+	// DstMAC (6) + SrcMAC (6)
+	buf.Write([]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55})
+	buf.Write([]byte{0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB})
 
-		// Parseamos el paquete falso como lo haría el listener real
-		packet := gopacket.NewPacket(buf.Bytes(), layers.LayerTypeEthernet, gopacket.Default)
+	// VLAN Tagging (802.1Q) opcional
+	if vlanID > 0 {
+		binary.Write(buf, binary.BigEndian, uint16(0x8100)) // EtherType VLAN
+		// PRI + CFI + VLAN ID (simplificado)
+		binary.Write(buf, binary.BigEndian, uint16(vlanID))
+	}
 
-		// EJECUTAMOS LA FUNCIÓN BAJO PRUEBA
-		info, ok := extractPacketInfo(packet)
+	// EtherType real
+	binary.Write(buf, binary.BigEndian, ethType)
 
-		// Verificaciones lógicas post-ejecución
-		if ok {
-			if len(info.Payload) > MaxPayloadSize {
-				t.Errorf("Seguridad rota: Se aceptó un payload de %d bytes, mayor al límite de %d", len(info.Payload), MaxPayloadSize)
+	// Si no es IPv4, terminamos aquí para probar descarte por EtherType
+	if ethType != 0x0800 {
+		return buf.Bytes()
+	}
+
+	// --- IPv4 HEADER (Mínimo 20 bytes) ---
+	// Byte 0: Version (4) + IHL (5 words = 20 bytes) -> 0x45
+	buf.WriteByte(0x45)
+	buf.WriteByte(0x00) // TOS
+
+	// Total Length (IP Header + UDP Header + Payload)
+	ipTotalLen := 20 + 8 + len(payload)
+	binary.Write(buf, binary.BigEndian, uint16(ipTotalLen))
+
+	buf.Write([]byte{0x00, 0x01}) // ID
+	buf.Write([]byte{0x00, 0x00}) // Flags/Frag
+	buf.WriteByte(64)             // TTL
+	buf.WriteByte(proto)          // Protocolo
+	buf.Write([]byte{0x00, 0x00}) // Checksum (ignorado por nuestro parser)
+	buf.Write(srcIP.To4())
+	buf.Write(dstIP.To4())
+
+	// Si no es UDP, terminamos aquí para probar descarte por Proto
+	if proto != 17 {
+		return buf.Bytes()
+	}
+
+	// --- UDP HEADER (8 bytes) ---
+	binary.Write(buf, binary.BigEndian, uint16(12345))   // SrcPort
+	binary.Write(buf, binary.BigEndian, uint16(dstPort)) // DstPort
+
+	// UDP Length (Header + Payload)
+	udpLen := 8 + len(payload)
+	binary.Write(buf, binary.BigEndian, uint16(udpLen))
+
+	buf.Write([]byte{0x00, 0x00}) // Checksum
+
+	// --- PAYLOAD ---
+	buf.Write(payload)
+
+	return buf.Bytes()
+}
+
+func TestParsePacket(t *testing.T) {
+	targetPort := 3001
+	payload := []byte("knock_knock_neo")
+	srcIP := net.IP{192, 168, 1, 100}
+	dstIP := net.IP{10, 0, 0, 1}
+
+	tests := []struct {
+		name       string
+		packetData []byte
+		wantValid  bool
+	}{
+		{
+			name:       "Valid IPv4 UDP Packet",
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, targetPort, payload),
+			wantValid:  true,
+		},
+		{
+			name:       "Valid VLAN Tagged Packet",
+			packetData: constructPacket(0x0800, 10, 17, srcIP, dstIP, targetPort, payload),
+			wantValid:  true,
+		},
+		{
+			name:       "Invalid EtherType (ARP)",
+			packetData: constructPacket(0x0806, 0, 0, nil, nil, 0, nil),
+			wantValid:  false,
+		},
+		{
+			name:       "Invalid Protocol (TCP)",
+			packetData: constructPacket(0x0800, 0, 6, srcIP, dstIP, targetPort, payload),
+			wantValid:  false,
+		},
+		{
+			name:       "Wrong Destination Port",
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, 9999, payload),
+			wantValid:  false,
+		},
+		{
+			name:       "Empty Payload",
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, targetPort, []byte{}),
+			wantValid:  false,
+		},
+		{
+			name:       "Truncated Packet (Header Only)",
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, targetPort, payload)[:30], // Cortamos a la mitad
+			wantValid:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			valid, info := parsePacket(tt.packetData, targetPort)
+			if valid != tt.wantValid {
+				t.Errorf("parsePacket() valid = %v, want %v", valid, tt.wantValid)
 			}
-		}
-	})
+			if valid {
+				if !bytes.Equal(info.Payload, payload) {
+					t.Errorf("Payload mismatch. Got %s, want %s", info.Payload, payload)
+				}
+				if !info.SourceIP.Equal(srcIP.To4()) {
+					t.Errorf("Source IP mismatch. Got %v, want %v", info.SourceIP, srcIP)
+				}
+			}
+		})
+	}
 }

@@ -2,6 +2,19 @@
 
 Todos los cambios notables en este proyecto serán documentados en este archivo.
 
+## [2.2.0]
+
+### Changed
+- **Motor de Captura Nativo (Pure Go):** Se ha reescrito completamente la capa de red (`listener`). `libpcap` ha sido reemplazado por una implementación directa sobre `AF_PACKET` de Linux. Esto reduce la latencia, el consumo de memoria y elimina el overhead de CGo.
+- **Parser Zero-Copy:** Implementación de un decodificador de paquetes manual optimizado para evitar asignaciones de memoria en el bucle de lectura principal.
+- **Compilación Estática:** El binario del servidor ahora es 100% estático (`CGO_ENABLED=0`). No requiere librerías compartidas del sistema.
+
+### Added
+- **Soporte VLAN (802.1Q):** El nuevo motor ahora detecta y procesa correctamente paquetes etiquetados con VLAN, permitiendo el uso de GhostKnock en redes troncales y entornos virtualizados complejos.
+
+### Removed
+- **Dependencia de `libpcap`:** Eliminada la necesidad de instalar `libpcap-dev` o `libpcap0.8` en el sistema host.
+
 ## [2.1.0]
 
 ### Added
