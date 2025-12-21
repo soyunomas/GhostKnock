@@ -37,6 +37,22 @@ Restart=on-failure
 # un error de configuración persistente.
 RestartSec=5s
 
+# ==============================================================================
+# HARDENING / BLINDAJE (Opcional)
+# ==============================================================================
+# Por defecto, GhostKnock se ejecuta como root con plenos poderes.
+# Si solo usas GhostKnock para gestionar el Firewall (iptables), puedes descomentar
+# la siguiente línea para restringir lo que el proceso puede hacer si es hackeado.
+#
+# ADVERTENCIA: Si activas esto, comandos como 'reboot', 'mount' o actualizaciones
+# del sistema podrían fallar desde GhostKnock.
+#
+# CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SETUID CAP_SETGID
+# ==============================================================================
+
+# Opcional: Evitar que el servicio gane nuevos privilegios no solicitados
+# NoNewPrivileges=yes
+
 [Install]
 # Habilita el servicio para que se inicie en el arranque del sistema
 # en un entorno multi-usuario estándar (sin GUI).
