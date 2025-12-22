@@ -1,7 +1,7 @@
 # 👻 GhostKnock
 
 [![Licencia: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/badge/release-v2.1.0-blue.svg)](https://github.com/soyunomas/GhostKnock/releases)
+[![Release](https://img.shields.io/badge/release-v2.2.0-blue.svg)](https://github.com/soyunomas/GhostKnock/releases)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-lightgrey.svg)]()
 
 **GhostKnock** es un sistema de **ejecución remota segura, invisible y confidencial**.
@@ -78,13 +78,13 @@ Descarga la última versión desde [Releases](https://github.com/soyunomas/Ghost
 
 *   **Para el Servidor (Demonio + Herramientas):**
     ```bash
-    sudo dpkg -i ghostknock_2.1.0_amd64.deb
+    sudo dpkg -i ghostknock_2.2.0_amd64.deb
     # Se instala el servicio systemd, logrotate y se asegura /etc/ghostknock
     ```
 
 *   **Para Clientes Remotos (Solo Herramientas):**
     ```bash
-    sudo dpkg -i ghostknock-client_2.1.0_amd64.deb
+    sudo dpkg -i ghostknock-client_2.2.0_amd64.deb
     ```
 
 ### Opción B: Ejecutables para Windows
