@@ -107,7 +107,7 @@ func main() {
 	// 3. Configuración de Logging (Dinámica)
 	setupLogging(cfg.Logging)
 
-	slog.Info("Iniciando demonio GhostKnockd (v2.1 Hot-Reload Ready)...")
+	slog.Info("Iniciando demonio GhostKnockd (Hot-Reload Ready)...")
 
 	// 4. Carga de Claves
 	serverPrivKeyBytes, err := os.ReadFile(cfg.ServerPrivateKeyPath)
