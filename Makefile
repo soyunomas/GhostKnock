@@ -61,6 +61,8 @@ build-linux: $(ALL_BINS)
 	@echo "✅ Binarios para Linux compilados."
 
 $(ALL_BINS):
+	@echo "📦 Verificando dependencias (go mod tidy)..."
+	@$(GO) mod tidy
 	@echo "🔨 Compilando $@ (Linux/$(ARCH)) con versión $(VERSION)..."
 	@$(ENV_VARS) $(GO) build $(GOFLAGS) $(LDFLAGS_VERSION) -o $@ ./cmd/$@/
 
