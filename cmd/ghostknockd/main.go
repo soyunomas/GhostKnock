@@ -23,10 +23,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/ghostknock/internal/config"
-	"github.com/your-org/ghostknock/internal/executor"
-	"github.com/your-org/ghostknock/internal/listener"
-	"github.com/your-org/ghostknock/internal/protocol"
+	"github.com/soyunomas/ghostknock/internal/config"
+	"github.com/soyunomas/ghostknock/internal/executor"
+	"github.com/soyunomas/ghostknock/internal/listener"
+	"github.com/soyunomas/ghostknock/internal/protocol"
 	"golang.org/x/time/rate"
 )
 

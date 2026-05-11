@@ -16,7 +16,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/your-org/ghostknock/internal/config"
+	"github.com/soyunomas/ghostknock/internal/config"
 )
 
 // safeParamRegex define la lista blanca de caracteres permitidos en los parámetros.
