@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
-	"github.com/your-org/ghostknock/internal/config"
+	"github.com/soyunomas/ghostknock/internal/config"
 )
 
 // Constantes de Seguridad para la captura

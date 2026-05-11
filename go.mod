@@ -1,4 +1,4 @@
-module github.com/your-org/ghostknock
+module github.com/soyunomas/ghostknock
 
 go 1.24.0
 

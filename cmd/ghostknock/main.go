@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/your-org/ghostknock/internal/protocol"
+	"github.com/soyunomas/ghostknock/internal/protocol"
 	"gopkg.in/yaml.v3"
 )
 
