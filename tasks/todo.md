@@ -1,5 +1,125 @@
 # GhostKnock Security Remediation TODO
 
+## Active Plan: Main branch security audit
+
+### Goal
+
+Perform a defensive expert review of the current `main` branch and identify
+confirmed vulnerabilities, security debt, false positives, and verification
+gaps across network capture, cryptography, replay protection, authorization,
+command execution, hooks, configuration, logging, privileges, and packaging.
+
+### Scope
+
+- Review all Go security boundaries and Linux service packaging.
+- Model remote unauthenticated, compromised authorized-client, local operator,
+  and post-compromise threats.
+- Verify negative paths and concurrency with tests and the race detector.
+- Run available static and dependency-security tools.
+- Record evidence with file/line references in a standalone audit report.
+
+### Non-goals
+
+- Do not redesign the protocol or change production behavior during the audit.
+- Do not classify documented architectural debt as an exploitable vulnerability
+  without a concrete attack path.
+- Do not claim live AF_PACKET validation without root or `CAP_NET_RAW`.
+
+### Files affected
+
+- `tasks/todo.md`
+- `tasks/lessons.md` only if a new confirmed lesson is found
+- `tasks/research/main-security-audit-2026-06-12.md`
+
+### Risks
+
+- Confusing operator-controlled configuration with remote attacker input.
+- Reporting mitigated findings or known false positives as current defects.
+- Missing cross-boundary issues between reload, caches, hooks, and privileges.
+- Optional tools may be unavailable or blocked by the environment.
+
+### Verification
+
+```bash
+GOCACHE=/tmp/ghostknock-go-build go test ./... -count=1
+GOCACHE=/tmp/ghostknock-go-build go test -race ./... -count=1
+GOCACHE=/tmp/ghostknock-go-build go vet ./...
+GOCACHE=/tmp/ghostknock-go-build make build
+govulncheck ./...
+gosec ./...
+staticcheck ./...
+```
+
+### Rollback
+
+Remove only the audit plan/report documentation. No production code should
+change as part of this review unless a separately documented confirmed bug
+requires autonomous remediation.
+
+### Tasks
+
+- [x] TASK-AUDIT-001: Review cryptography, authentication, replay, time, and TOTP
+  - Files: `internal/protocol/`, `cmd/ghostknockd/`, related tests.
+  - Risk: false assumptions about signed/encrypted field boundaries.
+  - Tests: protocol tests, replay/freshness tests, race detector.
+  - Acceptance: attack paths and preserved invariants are explicitly documented.
+  - Status: Complete.
+  - Notes: No signature, decryption, timestamp, TOTP, or replay bypass was
+    confirmed. Replay-cache capacity and authorization order are documented as
+    a separate availability finding.
+
+- [x] TASK-AUDIT-002: Review AF_PACKET, BPF, parser, and resource controls
+  - Files: `internal/listener/`, server worker/rate-limit paths.
+  - Risk: kernel/userspace filter mismatch or malformed-packet bypass.
+  - Tests: BPF VM/parser negative cases and global race tests.
+  - Acceptance: destination filtering and bounded processing are verified.
+  - Status: Complete.
+  - Notes: Destination BPF/parser invariants hold. Pre-authentication crypto
+    remains O(users), and the per-IP limiter does not cover distributed or
+    spoofed sources.
+
+- [x] TASK-AUDIT-003: Review executor, hooks, templates, logs, and privileges
+  - Files: `internal/executor/`, `internal/config/`, systemd unit.
+  - Risk: command injection, secret leakage, privilege amplification.
+  - Tests: executor/config tests and static analysis.
+  - Acceptance: remote-input paths are distinguished from trusted admin config.
+  - Status: Complete.
+  - Notes: Confirmed unbounded async reversions/hooks, output buffering,
+    process-argument secret exposure, strict-schema gaps, and unrestricted
+    root service amplification.
+
+- [x] TASK-AUDIT-004: Run verification tools and publish findings
+  - Files: audit report and task status.
+  - Risk: environmental tool failures misclassified as repository defects.
+  - Tests: test, race, vet, build, and available security scanners.
+  - Acceptance: findings are severity-ordered, evidenced, and reproducible.
+  - Status: Complete.
+  - Notes: Tests, race, build, and protocol fuzzing pass. Vet, govulncheck, and
+    gosec findings are triaged in the audit report. Staticcheck and privileged
+    live AF_PACKET/systemd checks were unavailable.
+
+## Result: Main branch security audit
+
+### Changes made
+
+- Added `tasks/research/main-security-audit-2026-06-12.md`.
+- Recorded seven medium and four low findings with attack prerequisites,
+  evidence, and remediation.
+- Added lessons for strict security configuration and bounded asynchronous
+  rollback work.
+- No production code or configuration behavior changed.
+
+### Verification results
+
+- `go test ./... -count=1`: pass.
+- `go test -race ./... -count=1`: pass.
+- `make build`: pass.
+- protocol fuzzing for 10 seconds: pass, approximately 521,000 executions.
+- `go vet ./...`: one existing client address-format warning.
+- `govulncheck`: one reachable Windows standard-library advisory.
+- `gosec`: 15 results reviewed and triaged.
+- `staticcheck`: unavailable.
+
 ## Active Plan: Native listener hardening
 
 ### Goal
@@ -535,7 +655,7 @@ Final expert review found no residual defects introduced by Phase 2.
 ### Remaining pre-existing risks
 
 - Legacy command execution still uses `/bin/sh -c`.
-- Post-hook and revert goroutines are not managed by the server execution semaphore.
+- ~~Post-hook and revert goroutines are not managed by the server execution semaphore.~~ FIXED (ver Resultado: background-task lifecycle al final).
 - Revert scheduling uses in-memory `time.Sleep`.
 - Revert-hook errors are logged by `RunHook` but ignored by the caller.
 - The installed Go 1.25.5 toolchain should be upgraded to at least Go 1.25.10.
@@ -543,3 +663,47 @@ Final expert review found no residual defects introduced by Phase 2.
 ### Lessons added
 
 - Parse structured languages through their AST rather than regex matching.
+
+---
+
+## Resultado: background-task lifecycle (post-hooks y reversiones acotados)
+
+### Vulnerabilidad (ALTA)
+`executor.Execute` lanzaba post-hooks y `scheduleRevert` como `go ...`
+fire-and-forget. Esas goroutines escapaban del semáforo del servidor
+(`executionSem`, anti-forkbomb) y del `executionWg` de apagado: una reversión
+(comando como root) podía ejecutarse tras "Apagado seguro completado", y un
+usuario autorizado podía acumular reversiones sin límite de concurrencia.
+
+### Cambios realizados
+- Nuevo `internal/executor/coordinator.go`: `Coordinator` con semáforo propio
+  (acota procesos de fondo concurrentes), `WaitGroup` (drenable en apagado),
+  contexto (interrumpe la espera de reversión) y recuperación de panics.
+- `executor.Execute` y `scheduleRevert` pasan a ser métodos de `*Coordinator`.
+  Post-hooks/on-success/on-error usan `goBounded`; la reversión usa `goTracked`
+  + `sleep` cancelable + `runBounded` para el comando.
+- `cmd/ghostknockd/main.go`: el servidor crea `executionCoord` con el ctx del
+  daemon (cap = cap del `executionSem`), ejecuta vía `executionCoord.Execute` y
+  drena con `executionCoord.Wait()` en el Paso D del apagado (tras `cancel()`,
+  que interrumpe las esperas de reversión pendientes).
+
+### Tests
+- Nuevos en `internal/executor/coordinator_test.go`:
+  `TestCoordinatorWaitDrainsRevert`,
+  `TestCoordinatorShutdownInterruptsRevertDelay`,
+  `TestCoordinatorBoundsConcurrentBackgroundCommands`.
+- Tests existentes adaptados al receiver `Coordinator` vía helper `testCoord(t)`.
+
+### Resultado de verificación
+- `go build ./...`: OK
+- `go test ./...`: OK
+- `go test -race ./...`: OK
+- `go test -race -count=20 -run TestCoordinator ./internal/executor/`: OK
+- `go vet ./...`: solo el hallazgo preexistente de IPv6 en `cmd/ghostknock`.
+- `make build`: OK
+
+### Riesgos pendientes (sin cambiar)
+- El semáforo de fondo es independiente del síncrono: máximo teórico de
+  procesos = cap síncrono + cap de fondo. Aceptable y documentado.
+- En apagado, las reversiones pendientes se ejecutan de inmediato (cerrar lo
+  abierto) en vez de esperar el delay.

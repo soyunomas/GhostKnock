@@ -67,6 +67,9 @@ type Server struct {
 	executionSem chan struct{}
 	// SEGURIDAD: WaitGroup para asegurar que los scripts terminen al apagar (Integridad)
 	executionWg sync.WaitGroup
+	// SEGURIDAD: Coordinator que acota y rastrea las tareas de fondo (post-hooks y
+	// reversiones) para que respeten el límite de concurrencia y se drenen al apagar.
+	executionCoord *executor.Coordinator
 
 	// VISIBILIDAD: Métricas atómicas (High Performance Counters)
 	droppedPackets   uint64
@@ -143,6 +146,10 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Coordinator de tareas de fondo (post-hooks y reversiones). Comparte el ctx
+	// del daemon para que el apagado interrumpa las esperas de reversión.
+	server.executionCoord = executor.NewCoordinator(ctx, cap(server.executionSem))
 
 	// --- GESTIÓN DE SEÑALES (Reload + Shutdown) ---
 	signalChan := make(chan os.Signal, 1)
@@ -221,6 +228,11 @@ func main() {
 			// Paso C: Esperar a que los scripts de ejecución terminen
 			slog.Info("Esperando finalización de procesos activos...")
 			server.executionWg.Wait()
+
+			// Paso D: Drenar tareas de fondo (post-hooks y reversiones). El cancel()
+			// previo interrumpe las esperas de reversión para no bloquear el cierre.
+			slog.Info("Esperando finalización de tareas de fondo (hooks/reversiones)...")
+			server.executionCoord.Wait()
 
 			slog.Info("Apagado seguro completado.")
 			break // Salir del bucle y terminar programa
@@ -580,7 +592,7 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 			}
 
 			// ACTUALIZADO: Pasamos config.Daemon para el shell configurable
-			if err := executor.Execute(actionDef, authorizedUser.Name, packetInfo.SourceIP, payload.Params, currentConfig.GlobalHooks, currentConfig.Daemon); err != nil {
+			if err := s.executionCoord.Execute(actionDef, authorizedUser.Name, packetInfo.SourceIP, payload.Params, currentConfig.GlobalHooks, currentConfig.Daemon); err != nil {
 				slog.Error("Error en ejecución", "action", payload.ActionID, "error", err)
 			}
 		}()

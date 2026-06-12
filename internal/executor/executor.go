@@ -38,7 +38,9 @@ func redactParams(params map[string]string, sensitive []string) map[string]strin
 
 // Execute procesa una acción, valida sus parámetros, la ejecuta y programa su reversión.
 // MODIFICADO (v2.1): Usa templates pre-compilados en config.Action para evitar parsing runtime.
-func Execute(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks, daemonCfg config.Daemon) error {
+// MODIFICADO (seguridad): es método de Coordinator para que los post-hooks y las
+// reversiones queden acotados por el semáforo de fondo y se esperen en el apagado.
+func (c *Coordinator) Execute(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks, daemonCfg config.Daemon) error {
 	params = cloneParams(params)
 	action.SensitiveParams = append([]string(nil), action.SensitiveParams...)
 
@@ -106,31 +108,31 @@ func Execute(action config.Action, user string, sourceIP net.IP, params map[stri
 	hCtx.Status = status
 	hCtx.ErrorMsg = errMsg
 
-	// --- 6. ACTION POST-HOOK (Fire-and-Forget) ---
+	// --- 6. ACTION POST-HOOK (Fire-and-Forget, acotado y rastreado) ---
 	if action.PostHook != "" {
 		hCtxPost := hCtx
 		hCtxPost.Stage = "action_post"
-		go RunHook(action.PostHook, hCtxPost)
+		c.goBounded(func() { _ = RunHook(action.PostHook, hCtxPost) })
 	}
 
-	// --- 7. GLOBAL POST-HOOKS (Fire-and-Forget) ---
+	// --- 7. GLOBAL POST-HOOKS (Fire-and-Forget, acotados y rastreados) ---
 	if status == "success" {
 		if globalHooks.OnSuccess != "" {
 			hCtxGlobal := hCtx
 			hCtxGlobal.Stage = "global_success"
-			go RunHook(globalHooks.OnSuccess, hCtxGlobal)
+			c.goBounded(func() { _ = RunHook(globalHooks.OnSuccess, hCtxGlobal) })
 		}
 	} else {
 		if globalHooks.OnError != "" {
 			hCtxGlobal := hCtx
 			hCtxGlobal.Stage = "global_error"
-			go RunHook(globalHooks.OnError, hCtxGlobal)
+			c.goBounded(func() { _ = RunHook(globalHooks.OnError, hCtxGlobal) })
 		}
 	}
 
-	// --- 8. PROGRAMAR REVERSIÓN ---
+	// --- 8. PROGRAMAR REVERSIÓN (rastreada; la espera y el comando se acotan) ---
 	if action.RevertCommand != "" && action.RevertDelaySeconds > 0 && action.RevertCommandTmpl != nil {
-		go scheduleRevert(action, user, sourceIP, params, globalHooks, daemonCfg)
+		c.goTracked(func() { c.scheduleRevert(action, user, sourceIP, params, globalHooks, daemonCfg) })
 	}
 
 	if cmdErr != nil {
@@ -141,19 +143,26 @@ func Execute(action config.Action, user string, sourceIP net.IP, params map[stri
 }
 
 // scheduleRevert espera el tiempo especificado y luego ejecuta el comando de reversión.
-func scheduleRevert(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks, daemonCfg config.Daemon) {
+// MODIFICADO (seguridad): es método de Coordinator. La espera es cancelable en el
+// apagado (c.sleep) y el comando de reversión se ejecuta acotado por el semáforo de
+// fondo (c.runBounded), evitando reversiones no acotadas como root.
+func (c *Coordinator) scheduleRevert(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks, daemonCfg config.Daemon) {
 	delay := time.Duration(action.RevertDelaySeconds) * time.Second
 	slog.Info(
 		"Programando reversión de acción",
 		"source_ip", sourceIP.String(),
 		"delay", delay.String(),
 	)
-	time.Sleep(delay)
+	c.sleep(delay)
 
 	slog.Info("Ejecutando reversión", "source_ip", sourceIP.String())
 
-	// Ejecutar comando de reversión usando el shell configurado y el template compilado
-	err := runCommand("revert", action.RevertCommand, action.RevertCommandTmpl, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams, daemonCfg.ShellPath, daemonCfg.ShellFlag)
+	// Ejecutar comando de reversión usando el shell configurado y el template compilado.
+	// Acotado por el semáforo de fondo para preservar el límite anti-forkbomb.
+	var err error
+	c.runBounded(func() {
+		err = runCommand("revert", action.RevertCommand, action.RevertCommandTmpl, action.TimeoutSeconds, action.RunAsUser, sourceIP, params, action.SensitiveParams, daemonCfg.ShellPath, daemonCfg.ShellFlag)
+	})
 
 	if err != nil {
 		slog.Error(

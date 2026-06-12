@@ -1,5 +1,54 @@
 # Lessons Learned
 
+## 2026-06-12 — Security configuration must reject unknown fields
+
+### Error o riesgo detectado
+
+The YAML decoder accepts misspelled fields. A typo such as `totp_secert`
+therefore validates successfully while silently disabling the intended TOTP
+control.
+
+### Regla nueva
+
+Security-sensitive configuration must use a strict schema, including custom
+YAML decoders, and tests must prove that misspelled controls fail closed.
+
+### Ejemplo
+
+`totp_secret` must be accepted, while `totp_secert` must make `ghostknockd -t`
+fail with the exact unknown field and line.
+
+### Archivos relacionados
+
+- `internal/config/config.go`
+- `internal/config/config_test.go`
+- `tasks/research/main-security-audit-2026-06-12.md`
+
+## 2026-06-12 — Delayed security side effects need a bounded lifecycle
+
+### Error o riesgo detectado
+
+Main command execution is bounded and tracked, but post-hooks and delayed
+reversions are launched as independent goroutines. They can accumulate and are
+not guaranteed to complete during shutdown.
+
+### Regla nueva
+
+Any asynchronous hook or rollback that affects security state must have a
+bounded queue, explicit concurrency, cancellation, shutdown accounting, and a
+documented persistence decision.
+
+### Ejemplo
+
+A firewall-opening action with a delayed close must not lose its close
+operation merely because the daemon receives SIGTERM before the delay expires.
+
+### Archivos relacionados
+
+- `cmd/ghostknockd/main.go`
+- `internal/executor/executor.go`
+- `tasks/research/main-security-audit-2026-06-12.md`
+
 ## 2026-06-12 — Wildcard capture must be link-type independent
 
 ### Error o riesgo detectado
@@ -154,3 +203,28 @@ destination port.
 - `internal/listener/listener_linux.go`
 - `internal/listener/listener_test.go`
 - `internal/config/config.go`
+
+## 2026-06-12 — Goroutines fire-and-forget escapan del ciclo de vida
+
+### Error o riesgo detectado
+Las tareas asíncronas lanzadas con `go fn()` dentro de `executor.Execute`
+(post-hooks y reversiones) no estaban acotadas por el semáforo anti-forkbomb ni
+esperadas por el `WaitGroup` de apagado. Un comando como root (reversión) podía
+ejecutarse después de que el daemon reportara un cierre limpio, y la concurrencia
+de fondo era ilimitada.
+
+### Regla nueva
+Toda goroutine que ejecute trabajo de seguridad (procesos, hooks, comandos como
+root) debe estar acotada por un semáforo y rastreada por un WaitGroup drenable en
+el apagado. Nunca usar `go fn()` suelto para comandos o hooks. Las esperas largas
+(`time.Sleep`) deben ser cancelables por contexto para no bloquear el cierre.
+
+### Ejemplo
+`scheduleRevert` ahora corre como `Coordinator.goTracked(func(){ c.sleep(delay);
+c.runBounded(revert) })`, y el apagado llama `executionCoord.Wait()` tras
+`cancel()`, que interrumpe la espera y ejecuta la reversión de inmediato.
+
+### Archivos relacionados
+- internal/executor/coordinator.go
+- internal/executor/executor.go
+- cmd/ghostknockd/main.go

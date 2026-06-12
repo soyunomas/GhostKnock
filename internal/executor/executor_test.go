@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"net"
 	"os"
@@ -54,7 +55,7 @@ func TestExecuteRejectsInvalidSensitiveParamNames(t *testing.T) {
 	for _, sensitive := range tests {
 		action := testAction(t, "true")
 		action.SensitiveParams = sensitive
-		err := Execute(action, "tester", net.ParseIP("192.0.2.1"), nil, config.Hooks{}, testDaemon())
+		err := testCoord(t).Execute(action, "tester", net.ParseIP("192.0.2.1"), nil, config.Hooks{}, testDaemon())
 		if err == nil {
 			t.Fatalf("expected sensitive_params %v to be rejected", sensitive)
 		}
@@ -86,7 +87,7 @@ func TestExecuteRejectsInvalidParamsBeforeHooks(t *testing.T) {
 						action.PreHook = hook
 					}
 
-					err := Execute(action, "tester", net.ParseIP("192.0.2.1"), params, globalHooks, testDaemon())
+					err := testCoord(t).Execute(action, "tester", net.ParseIP("192.0.2.1"), params, globalHooks, testDaemon())
 					if err == nil {
 						t.Fatal("expected invalid params to cancel execution")
 					}
@@ -106,7 +107,7 @@ func TestExecuteRejectsMissingRequiredParamBeforeHooks(t *testing.T) {
 
 	action := testAction(t, "printf '%s' {{ .Params.required }}")
 	action.PreHook = hook
-	err := Execute(action, "tester", net.ParseIP("192.0.2.1"), nil, config.Hooks{}, testDaemon())
+	err := testCoord(t).Execute(action, "tester", net.ParseIP("192.0.2.1"), nil, config.Hooks{}, testDaemon())
 	if err == nil {
 		t.Fatal("expected missing required param to cancel execution")
 	}
@@ -122,7 +123,7 @@ func TestExecuteRejectsDynamicParamAccessBeforeHooks(t *testing.T) {
 
 	action := testAction(t, `printf '%s' {{index .Params "required"}}`)
 	action.PreHook = hook
-	err := Execute(
+	err := testCoord(t).Execute(
 		action,
 		"tester",
 		net.ParseIP("192.0.2.1"),
@@ -145,7 +146,7 @@ func TestExecuteValidParamsReachHook(t *testing.T) {
 
 	action := testAction(t, "true")
 	action.PreHook = hook
-	if err := Execute(
+	if err := testCoord(t).Execute(
 		action,
 		"tester",
 		net.ParseIP("192.0.2.1"),
@@ -172,7 +173,7 @@ func TestHookFailureCancelsAction(t *testing.T) {
 
 	action := testAction(t, "printf reached > "+commandMarker)
 	action.PreHook = hook
-	err := Execute(action, "tester", net.ParseIP("192.0.2.1"), nil, config.Hooks{}, testDaemon())
+	err := testCoord(t).Execute(action, "tester", net.ParseIP("192.0.2.1"), nil, config.Hooks{}, testDaemon())
 	if err == nil {
 		t.Fatal("expected failing hook to cancel action")
 	}
@@ -211,7 +212,7 @@ func TestHookOutputRedactsSensitiveParams(t *testing.T) {
 			action := testAction(t, "true")
 			action.PreHook = hook
 			action.SensitiveParams = []string{"token"}
-			_ = Execute(
+			_ = testCoord(t).Execute(
 				action,
 				"tester",
 				net.ParseIP("192.0.2.1"),
@@ -240,7 +241,7 @@ func TestCommandOutputRedactsSensitiveParams(t *testing.T) {
 
 	action := testAction(t, "printf '%s' {{.Params.Token}}; printf '%s' {{.Params.Token}} >&2; exit 1")
 	action.SensitiveParams = []string{"token"}
-	err := Execute(
+	err := testCoord(t).Execute(
 		action,
 		"tester",
 		net.ParseIP("192.0.2.1"),
@@ -267,7 +268,7 @@ func TestPostHookUsesValidatedParamSnapshot(t *testing.T) {
 	params := map[string]string{"target": "validated"}
 	action := testAction(t, "true")
 	action.PostHook = hook
-	if err := Execute(action, "tester", net.ParseIP("192.0.2.1"), params, config.Hooks{}, testDaemon()); err != nil {
+	if err := testCoord(t).Execute(action, "tester", net.ParseIP("192.0.2.1"), params, config.Hooks{}, testDaemon()); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	params["target"] = "mutated"
@@ -312,7 +313,7 @@ func TestRevertCommandAndHookUseParamSnapshot(t *testing.T) {
 	params := map[string]string{"target": "validated"}
 	snapshot := cloneParams(params)
 	params["target"] = "mutated"
-	scheduleRevert(
+	testCoord(t).scheduleRevert(
 		action,
 		"tester",
 		net.ParseIP("192.0.2.1"),
@@ -347,6 +348,15 @@ func testAction(t *testing.T, command string) config.Action {
 
 func testDaemon() config.Daemon {
 	return config.Daemon{ShellPath: "/bin/sh", ShellFlag: "-c"}
+}
+
+// testCoord crea un Coordinator de fondo para tests y garantiza el drenaje de las
+// tareas de fondo (post-hooks/reversiones) al terminar el test.
+func testCoord(t *testing.T) *Coordinator {
+	t.Helper()
+	c := NewCoordinator(context.Background(), 10)
+	t.Cleanup(c.Wait)
+	return c
 }
 
 func writeHook(t *testing.T, dir, name, body string) string {
