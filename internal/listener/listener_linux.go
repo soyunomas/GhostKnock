@@ -11,18 +11,20 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mdlayher/packet"
 	"github.com/soyunomas/ghostknock/internal/config"
+	"golang.org/x/net/bpf"
 	"golang.org/x/sys/unix"
 )
 
 // Constantes de Protocolo
 const (
-	ethTypeIPv4 = 0x0800
-	ethTypeVLAN = 0x8100
-	ipProtoUDP  = 17
+	ipProtoUDP        = 17
+	minIPv4HeaderLen  = 20
+	captureBufferSize = 2048
 )
 
 // Start inicia la captura de tráfico usando Sockets RAW de Linux (AF_PACKET).
@@ -36,27 +38,24 @@ func Start(ctx context.Context, listenerCfg config.Listener, pcapTimeoutMs int, 
 		os.Exit(1)
 	}
 
-	// 1. Resolver la Interfaz de Red
-	var ifi *net.Interface
-	var ifaceName string
-
-	if listenerCfg.Interface == "any" || listenerCfg.Interface == "" {
-		// nil hace que mdlayher/packet escuche en todas las interfaces
-		ifi = nil
-		ifaceName = "all/any"
-	} else {
-		ifi, err = net.InterfaceByName(listenerCfg.Interface)
-		if err != nil {
-			slog.Error("FATAL: No se pudo encontrar la interfaz de red", "interface", listenerCfg.Interface, "error", err)
-			os.Exit(1)
-		}
-		ifaceName = ifi.Name
+	// 1. Resolver la interfaz. AF_PACKET usa ifindex=0 para escuchar en todas.
+	ifi, ifaceName, err := resolveCaptureInterface(listenerCfg.Interface)
+	if err != nil {
+		slog.Error("FATAL: No se pudo encontrar la interfaz de red", "interface", listenerCfg.Interface, "error", err)
+		os.Exit(1)
 	}
 
-	// 2. Abrir el Socket RAW (AF_PACKET)
-	// Usamos packet.Raw para recibir las cabeceras Ethernet completas.
-	// Filtramos por ETH_P_IP para recibir solo tráfico IP y ahorrar llamadas del kernel.
-	conn, err := packet.Listen(ifi, packet.Raw, unix.ETH_P_IP, nil)
+	filter, err := buildBPFFilter(listenerCfg.Port, listenIP)
+	if err != nil {
+		slog.Error("FATAL: No se pudo construir el filtro BPF", "error", err)
+		os.Exit(1)
+	}
+
+	// 2. Abrir AF_PACKET en modo SOCK_DGRAM. Linux elimina la cabecera de
+	// enlace, por lo que "any" funciona igual para Ethernet, loopback y TUN.
+	// El BPF se instala antes de bind(2), de modo que solo UDP dirigido al
+	// puerto/IP configurados entra en la cola del socket.
+	conn, err := packet.Listen(ifi, packet.Datagram, unix.ETH_P_IP, &packet.Config{Filter: filter})
 	if err != nil {
 		slog.Error("FATAL: No se pudo abrir el socket AF_PACKET (¿tienes permisos root/CAP_NET_RAW?)", "error", err)
 		os.Exit(1)
@@ -75,11 +74,13 @@ func Start(ctx context.Context, listenerCfg config.Listener, pcapTimeoutMs int, 
 		"interface", ifaceName,
 		"udp_port", listenerCfg.Port,
 		"listen_ip", listenerCfg.ListenIP,
+		"address_family", "IPv4",
+		"kernel_filter", "BPF UDP dst",
 		"mode", "Zero-Copy Parser")
 
 	// 3. Buffer de Lectura (Hot Path)
 	// MTU estándar (1500) + Overhead Ethernet/VLAN/Jumbo. 2048 es seguro y eficiente (potencia de 2).
-	buf := make([]byte, 2048)
+	buf := make([]byte, captureBufferSize)
 
 	slog.Info("Esperando paquetes...")
 
@@ -128,6 +129,93 @@ func Start(ctx context.Context, listenerCfg config.Listener, pcapTimeoutMs int, 
 	}
 }
 
+func resolveCaptureInterface(value string) (*net.Interface, string, error) {
+	name := strings.TrimSpace(value)
+	if name == "" || name == "any" {
+		// mdlayher/packet requiere un puntero no nil, pero transmite Index
+		// directamente a sockaddr_ll. Linux define ifindex=0 como wildcard.
+		return &net.Interface{Index: 0, Name: "any"}, "any", nil
+	}
+
+	ifi, err := net.InterfaceByName(name)
+	if err != nil {
+		return nil, "", err
+	}
+	return ifi, ifi.Name, nil
+}
+
+func buildBPFFilter(targetPort int, targetIP net.IP) ([]bpf.RawInstruction, error) {
+	if targetPort <= 0 || targetPort > 65535 {
+		return nil, fmt.Errorf("UDP destination port out of range: %d", targetPort)
+	}
+
+	var ipv4 net.IP
+	if targetIP != nil {
+		ipv4 = targetIP.To4()
+		if ipv4 == nil {
+			return nil, fmt.Errorf("BPF destination address must be IPv4")
+		}
+	}
+
+	instructions := []bpf.Instruction{
+		// Validate IPv4 version and a minimum 20-byte header.
+		bpf.LoadAbsolute{Off: 0, Size: 1},
+		bpf.ALUOpConstant{Op: bpf.ALUOpAnd, Val: 0xf0},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x40},
+		bpf.LoadAbsolute{Off: 0, Size: 1},
+		bpf.ALUOpConstant{Op: bpf.ALUOpAnd, Val: 0x0f},
+		bpf.JumpIf{Cond: bpf.JumpGreaterOrEqual, Val: 5},
+
+		// Accept UDP only.
+		bpf.LoadAbsolute{Off: 9, Size: 1},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: ipProtoUDP},
+
+		// Reject all IPv4 fragments; this listener does not reassemble them.
+		bpf.LoadAbsolute{Off: 6, Size: 2},
+		bpf.ALUOpConstant{Op: bpf.ALUOpAnd, Val: 0x3fff},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0},
+	}
+
+	guardIndexes := []int{2, 5, 7, 10}
+	if ipv4 != nil {
+		instructions = append(instructions,
+			bpf.LoadAbsolute{Off: 16, Size: 4},
+			bpf.JumpIf{
+				Cond: bpf.JumpEqual,
+				Val:  binary.BigEndian.Uint32(ipv4),
+			},
+		)
+		guardIndexes = append(guardIndexes, len(instructions)-1)
+	}
+
+	instructions = append(instructions,
+		// X becomes the real IPv4 header length, so options are supported.
+		bpf.LoadMemShift{Off: 0},
+		bpf.LoadIndirect{Off: 2, Size: 2},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(targetPort)},
+		bpf.RetConstant{Val: captureBufferSize},
+		bpf.RetConstant{Val: 0},
+	)
+	guardIndexes = append(guardIndexes, len(instructions)-3)
+
+	rejectIndex := len(instructions) - 1
+	for _, index := range guardIndexes {
+		jump := instructions[index].(bpf.JumpIf)
+		skip := rejectIndex - index - 1
+		if skip > 255 {
+			return nil, fmt.Errorf("BPF program is too large")
+		}
+		jump.SkipFalse = uint8(skip)
+		instructions[index] = jump
+	}
+
+	raw, err := bpf.Assemble(instructions)
+	if err != nil {
+		return nil, fmt.Errorf("assemble BPF filter: %w", err)
+	}
+	return raw, nil
+}
+
 func parseListenIPv4(value string) (net.IP, error) {
 	if value == "" {
 		return nil, nil
@@ -144,43 +232,15 @@ func parseListenIPv4(value string) (net.IP, error) {
 	return ip, nil
 }
 
-// parsePacket implementa un parser manual de headers para evitar allocs.
+// parsePacket procesa el datagrama IPv4 entregado por AF_PACKET/SOCK_DGRAM.
 // Retorna true y la struct si el paquete es un candidato válido (UDP + Puerto correcto).
 func parsePacket(data []byte, targetPort int, targetIP net.IP) (bool, PacketInfo) {
-	// --- CAPA 1: ETHERNET ---
-	// Longitud mínima: Header Ethernet (14 bytes)
-	if len(data) < 14 {
+	// --- CAPA IPv4 ---
+	if len(data) < minIPv4HeaderLen {
 		return false, PacketInfo{}
 	}
 
-	// Bytes 12-13: EtherType
-	ethType := binary.BigEndian.Uint16(data[12:14])
-	offset := 14
-
-	// Manejo de VLAN (802.1Q)
-	if ethType == ethTypeVLAN {
-		// Necesitamos al menos 4 bytes más para el tag VLAN y el siguiente EtherType
-		if len(data) < 18 {
-			return false, PacketInfo{}
-		}
-		// El EtherType real está después del tag VLAN (bytes 16-17)
-		ethType = binary.BigEndian.Uint16(data[16:18])
-		offset += 4
-	}
-
-	// Solo nos interesa IPv4 (0x0800)
-	if ethType != ethTypeIPv4 {
-		return false, PacketInfo{}
-	}
-
-	// --- CAPA 2: IPv4 ---
-	// data[offset] es el inicio del header IP.
-	// Necesitamos al menos 20 bytes de header IP.
-	if len(data) < offset+20 {
-		return false, PacketInfo{}
-	}
-
-	ipHeader := data[offset:]
+	ipHeader := data
 
 	// Validar Versión (4) - Nibble alto del byte 0
 	if (ipHeader[0] >> 4) != 4 {
@@ -189,6 +249,9 @@ func parsePacket(data []byte, targetPort int, targetIP net.IP) (bool, PacketInfo
 
 	// Validar Protocolo (Byte 9). UDP = 17.
 	if ipHeader[9] != ipProtoUDP {
+		return false, PacketInfo{}
+	}
+	if binary.BigEndian.Uint16(ipHeader[6:8])&0x3fff != 0 {
 		return false, PacketInfo{}
 	}
 	if targetIP != nil && !net.IP(ipHeader[16:20]).Equal(targetIP) {
@@ -205,12 +268,18 @@ func parsePacket(data []byte, targetPort int, targetIP net.IP) (bool, PacketInfo
 		return false, PacketInfo{} // Header truncado
 	}
 
+	totalLen := int(binary.BigEndian.Uint16(ipHeader[2:4]))
+	if totalLen < int(ihl)+8 || totalLen > len(ipHeader) {
+		return false, PacketInfo{}
+	}
+	ipHeader = ipHeader[:totalLen]
+
 	// Extraer IP Origen (Bytes 12-15 del header IP)
 	// Hacemos copia segura para no fugar memoria del buffer grande
 	srcIP := make(net.IP, 4)
 	copy(srcIP, ipHeader[12:16])
 
-	// --- CAPA 3: UDP ---
+	// --- CAPA UDP ---
 	// El UDP empieza donde termina el IHL
 	udpOffset := int(ihl)
 	// Header UDP son 8 bytes fijos

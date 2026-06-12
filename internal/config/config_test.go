@@ -74,7 +74,49 @@ func TestLoadConfigReplayWindowDefaultAndExplicitZero(t *testing.T) {
 	}
 }
 
+func TestLoadConfigListenerIPPolicy(t *testing.T) {
+	tests := []struct {
+		name         string
+		listenerYAML string
+		wantErr      bool
+	}{
+		{
+			name:         "any interface without address",
+			listenerYAML: "listener:\n  interface: any\n  port: 3001",
+		},
+		{
+			name:         "IPv4 address",
+			listenerYAML: "listener:\n  interface: any\n  port: 3001\n  listen_ip: 203.0.113.10",
+		},
+		{
+			name:         "IPv6 is explicitly unsupported",
+			listenerYAML: "listener:\n  interface: any\n  port: 3001\n  listen_ip: 2001:db8::1",
+			wantErr:      true,
+		},
+		{
+			name:         "malformed address",
+			listenerYAML: "listener:\n  interface: any\n  port: 3001\n  listen_ip: not-an-ip",
+			wantErr:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := writeMinimalConfigWithListener(t, tt.listenerYAML, "security: {}")
+			_, err := LoadConfig(configPath)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("LoadConfig() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func writeMinimalConfig(t *testing.T, securityYAML string) string {
+	t.Helper()
+	return writeMinimalConfigWithListener(t, "listener:\n  interface: lo\n  port: 3001", securityYAML)
+}
+
+func writeMinimalConfigWithListener(t *testing.T, listenerYAML, securityYAML string) string {
 	t.Helper()
 
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)
@@ -89,9 +131,7 @@ func writeMinimalConfig(t *testing.T, securityYAML string) string {
 	}
 
 	configYAML := fmt.Sprintf(`server_private_key_path: %q
-listener:
-  interface: lo
-  port: 3001
+%s
 %s
 users:
   - name: test
@@ -100,7 +140,7 @@ users:
 actions:
   test:
     command: "true"
-`, privateKeyPath, securityYAML, base64.StdEncoding.EncodeToString(publicKey))
+`, privateKeyPath, listenerYAML, securityYAML, base64.StdEncoding.EncodeToString(publicKey))
 
 	configPath := filepath.Join(tempDir, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(configYAML), 0600); err != nil {

@@ -43,13 +43,16 @@ La versión 2.2 de GhostKnock utiliza una arquitectura de bajo nivel diseñada p
 A diferencia de las aplicaciones estándar que abren un socket y esperan conexiones (`bind`/`listen`), el demonio `ghostknockd` se conecta directamente a la capa de enlace de datos del Kernel de Linux utilizando sockets `AF_PACKET`.
 *   **Indetectable Localmente:** Herramientas de auditoría como `netstat`, `ss` o `lsof` no mostrarán a GhostKnock escuchando en ningún puerto.
 *   **Inspección Pre-Firewall:** GhostKnock captura y analiza las tramas Ethernet *antes* de que el firewall del sistema operativo (iptables/nftables) las procese. Esto permite configurar el firewall para **bloquear todo el tráfico entrante**, mientras GhostKnock sigue recibiendo las instrucciones de apertura legítimas.
+*   **Todas las interfaces:** `interface: "any"` usa `ifindex=0`, el wildcard real de AF_PACKET en Linux. La captura usa `SOCK_DGRAM`, que entrega el datagrama IPv4 sin una cabecera Ethernet fija y funciona con Ethernet, loopback y TUN; la normalización VLAN queda a cargo del kernel.
+*   **Política IP explícita:** El listener del daemon es IPv4-only en esta versión. Un `listen_ip` IPv6 se rechaza al cargar la configuración; no se descarta silenciosamente en ejecución.
 
 #### B. Pipeline de Procesamiento "Fail-Fast"
 Para garantizar la resistencia ante ataques de Denegación de Servicio (DoS), el servidor procesa cada paquete en un pipeline estricto de cinco etapas, diseñado para descartar tráfico ilegítimo con el mínimo coste computacional:
 
-1.  **Filtrado temprano en el parser nativo:** El listener descarta tramas que no
-    sean IPv4/UDP, no estén dirigidas al puerto configurado o no coincidan con
-    `listen_ip` cuando esté definido.
+1.  **Filtrado BPF en el kernel:** Antes de `bind(2)`, el listener instala un
+    filtro que acepta únicamente IPv4/UDP no fragmentado dirigido al puerto y
+    `listen_ip` configurados. El parser nativo repite esas validaciones como
+    defensa en profundidad.
 2.  **Lista Negra (Short-Circuit):** Se verifica la IP de origen contra la lista `deny_ips`. Si coincide, se descarta instantáneamente en memoria.
 3.  **Rate Limiting (Token Bucket):** Se aplica un límite de velocidad por IP. Si una IP inunda el servidor, sus paquetes se descartan antes de llegar a la capa criptográfica.
 4.  **Verificación de Firma (Ed25519):** El servidor comprueba la firma digital del paquete. **Esta es la barrera crítica:** si la firma no es matemáticamente válida, el paquete se elimina sin intentar descifrarlo, protegiendo la CPU contra el agotamiento.
@@ -217,8 +220,9 @@ sudo iptables -I INPUT -p udp --dport 3001 -j DROP
 server_private_key_path: "/etc/ghostknock/server_key"
 
 listener:
-  interface: "eth0"  # Interfaz WAN. Use "any" con precaución.
-  port: 3001         # Puerto invisible.
+  interface: "eth0"         # Interfaz WAN; "any" usa todas las interfaces.
+  port: 3001                # Puerto invisible.
+  # listen_ip: "203.0.113.10" # Solo IPv4; IPv6 falla al cargar config.
 
 tuning:
   packet_channel_buffer: 100   # Buffer para ráfagas de tráfico
@@ -731,7 +735,7 @@ Si una acción no se ejecuta, siga este orden estricto para aislar el problema:
 
 2.  **Verificar Interfaz de Escucha:**
     Revise `config.yaml`. Si `listener.interface` está configurado como `eth0` pero el tráfico llega por `eth1`, GhostKnock no lo verá.
-    *   **Solución:** Cambie a `interface: "any"` temporalmente para probar.
+    *   **Solución:** Cambie a `interface: "any"` para usar el wildcard AF_PACKET y capturar en todas las interfaces.
 
 3.  **Conflicto de Firewall Local (UFW/Iptables):**
     Aunque GhostKnock usa captura cruda con `AF_PACKET`, ciertas configuraciones agresivas de `nftables` o `RP_FILTER` pueden afectar la recepción del tráfico.

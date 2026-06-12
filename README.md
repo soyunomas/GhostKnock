@@ -19,7 +19,8 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
     *   **Indetectable externamente:** Ante un escaneo de red (Nmap), el puerto parecerá estar **cerrado** o filtrado. El servidor captura los paquetes desde la capa de enlace con `AF_PACKET`, procesando silenciosamente solo los legítimos y descartando el resto sin emitir respuesta.
 
 *   🚀 **Monitorización Pasiva y Eficiente:**
-    *   **Filtrado Temprano:** El parser nativo descarta tramas que no sean IPv4/UDP, no estén dirigidas al puerto configurado o no coincidan con `listen_ip`.
+    *   **Filtrado BPF en Kernel:** Antes de entrar en la cola del socket, el kernel descarta tráfico que no sea IPv4/UDP, fragmentos y paquetes que no estén dirigidos al puerto o `listen_ip` configurados. El parser nativo repite las comprobaciones como defensa en profundidad.
+    *   **Captura Multiinterfaz Real:** `interface: "any"` usa el wildcard AF_PACKET de Linux (`ifindex=0`). El modo cooked (`SOCK_DGRAM`) elimina la dependencia de una cabecera Ethernet fija y funciona de forma uniforme con Ethernet, loopback y TUN; la normalización VLAN queda a cargo del kernel.
     *   **Protección Short-Circuit:** Capacidad de definir una lista negra (`deny_ips`) que descarta tráfico de atacantes conocidos *antes* de realizar cualquier operación criptográfica, ahorrando recursos de CPU.
 
 *   🔧 **Tuning y Escalabilidad:**
@@ -393,9 +394,9 @@ Aquí tienes la sección completa **## ⚙️ Referencia de Configuración Compl
 | Sección | Campo | Tipo | Obligatorio | Descripción |
 | :--- | :--- | :--- | :---: | :--- |
 | *(Raíz)* | `server_private_key_path` | string | ✅ | Ruta a la clave privada del servidor. |
-| **`listener`** | `interface` | string | ✅ | Interfaz de red (ej: `eth0`, `any`). **Requiere restart.** |
+| **`listener`** | `interface` | string | ✅ | Interfaz de red (ej: `eth0`, `any`). `any` usa todas las interfaces. **Requiere restart.** |
 | | `port` | int | ✅ | Puerto UDP. **Requiere restart.** |
-| | `listen_ip` | string | ❌ | Escuchar solo en una IPv4 específica. |
+| | `listen_ip` | string | ❌ | Escuchar solo en una IPv4 específica. IPv6 no está soportado por el listener actual y se rechaza al cargar la configuración. |
 | **`logging`** | `log_level` | string | ❌ | Nivel: `debug`, `info`, `warn`, `error`. |
 | | `log_file` | string | ❌ | Ruta, `stdout` o `/dev/null`. |
 | | `log_format` | string | ❌ | `text` o `json`. |

@@ -26,7 +26,8 @@ listener:
   # Es invisible a escaneos (Nmap reportará "open|filtered" o "closed").
   port: 3001
 
-  # (Opcional) Escuchar solo en una IP específica de la interfaz.
+  # (Opcional) Escuchar solo en una IPv4 específica de la interfaz.
+  # El listener actual es IPv4-only y rechaza direcciones IPv6 al cargar config.
   # listen_ip: "203.0.113.10"
 
 # ------------------------------------------------------------------------------

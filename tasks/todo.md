@@ -1,5 +1,136 @@
 # GhostKnock Security Remediation TODO
 
+## Active Plan: Native listener hardening
+
+### Goal
+
+Make `listener.interface: any` work on Linux without panicking, install a
+kernel BPF filter for IPv4 UDP packets addressed to the configured destination
+port, and make the current IPv4-only listener policy explicit.
+
+### Scope
+
+- Represent Linux wildcard capture with AF_PACKET interface index `0`.
+- Attach classic BPF before `bind(2)` so unrelated traffic never enters the
+  socket receive path.
+- Use AF_PACKET cooked datagrams so filtering does not assume a fixed Ethernet
+  header and works across Ethernet, loopback, and TUN interfaces.
+- Filter by IPv4, UDP, non-fragmented packet, optional destination IPv4, and
+  UDP destination port.
+- Keep the Go packet parser as defense in depth.
+- Reject IPv6 `listener.listen_ip` during configuration loading.
+- Document that the daemon listener is IPv4-only in this phase.
+
+### Non-goals
+
+- Do not implement IPv6 packet parsing or dual-stack BPF in this change.
+- Do not alter the packet format, client transport, replay, or executor.
+- Do not add libpcap, CGO, or a new dependency.
+
+### Files affected
+
+- `internal/listener/listener_linux.go`
+- `internal/listener/listener_test.go`
+- `internal/config/config.go`
+- `internal/config/config_test.go`
+- `go.mod`
+- `README.md`
+- `config.yaml`
+- `config.yaml.example`
+- `docs/USER_GUIDE.md`
+- `tasks/todo.md`
+- `tasks/lessons.md`
+- `tasks/research/native-listener-hardening.md`
+- `tasks/research/native-listener-review.md`
+
+### Risks
+
+- Incorrect BPF offsets or jump distances could drop valid packets.
+- Wildcard capture could regress if a nil interface is passed to the packet
+  library.
+- A fixed Ethernet header assumption would make `any` fail on non-Ethernet
+  interfaces.
+- An undocumented IPv4-only policy could make IPv6 deployments fail silently.
+
+### Verification
+
+```bash
+GOCACHE=/tmp/ghostknock-go-build go test ./internal/listener ./internal/config -count=1
+GOCACHE=/tmp/ghostknock-go-build go test ./... -count=1
+GOCACHE=/tmp/ghostknock-go-build go test -race ./... -count=1
+GOCACHE=/tmp/ghostknock-go-build go vet ./...
+GOCACHE=/tmp/ghostknock-go-build make build
+```
+
+### Rollback
+
+Revert the listener, config validation, tests, and matching documentation as
+one unit. Do not retain the `any` resolver without its regression test or retain
+the IPv4-only documentation without fail-fast validation.
+
+### Tasks
+
+- [x] TASK-0301: Implement real `interface: any`
+  - Files: `internal/listener/listener_linux.go`, `internal/listener/listener_test.go`
+  - Risk: nil interface panic or accidental bind to one interface.
+  - Tests: wildcard resolver returns a non-nil interface with index `0`.
+  - Acceptance: `any` and the compatibility empty value use AF_PACKET ifindex `0`.
+  - Status: Complete.
+  - Notes: `any` is represented by a non-nil synthetic interface with index
+    `0`, matching Linux AF_PACKET wildcard semantics without triggering the
+    packet library's nil dereference. `SOCK_DGRAM` removes the physical link
+    header so the parser works across heterogeneous interfaces.
+
+- [x] TASK-0302: Install destination-oriented kernel BPF
+  - Files: `internal/listener/listener_linux.go`, `internal/listener/listener_test.go`
+  - Risk: false rejection from malformed offsets, IPv4 options, or fragmentation.
+  - Tests: accept correct UDP destination; reject source-port-only match, TCP,
+    wrong destination IP, wrong destination port, and fragments.
+  - Acceptance: BPF is assembled and supplied in `packet.Config` before bind.
+  - Status: Complete.
+  - Notes:
+    - The filter is supplied through `packet.Config.Filter`, which the library
+      installs before `bind(2)`.
+    - VM tests cover destination port, optional destination IPv4, IPv4 options,
+      TCP, source-port-only matches, and fragments.
+    - A live AF_PACKET open was not possible in this environment because the
+      current user has neither root nor `CAP_NET_RAW`.
+
+- [x] TASK-0303: Make IPv6 policy explicit
+  - Files: config validation/tests and listener documentation.
+  - Risk: configurations previously accepted but ineffective now fail fast.
+  - Tests: IPv4/empty `listen_ip` accepted; IPv6 and malformed addresses rejected.
+  - Acceptance: daemon listener is explicitly IPv4-only and errors during config load.
+  - Status: Complete.
+  - Notes: The daemon listener remains IPv4-only; malformed and IPv6
+    `listen_ip` values now fail during `LoadConfig`, and documentation states
+    the limitation.
+
+## Result: Native listener hardening
+
+### Changes made
+
+- Replaced the broken nil wildcard with AF_PACKET `ifindex=0`.
+- Switched capture to cooked AF_PACKET datagrams to remove fixed link-header
+  assumptions from `interface: any`.
+- Added a classic BPF program installed before bind for IPv4, UDP,
+  non-fragmented traffic, optional destination IPv4, and destination port.
+- Retained equivalent parser checks as defense in depth.
+- Made IPv4-only support an explicit, fail-fast configuration policy.
+- Added BPF VM, wildcard-interface, parser, and configuration tests.
+- Addressed the independent review by replacing fixed Ethernet offsets with
+  cooked AF_PACKET datagrams and tightening malformed-packet validation.
+
+### Verification results
+
+- `go test ./internal/listener ./internal/config -count=1`: pass.
+- `go test ./... -count=1`: pass.
+- `go test -race ./... -count=1`: pass.
+- `make build`: pass.
+- `go vet ./...`: only the pre-existing client address-format finding remains
+  at `cmd/ghostknock/main.go:241`.
+- `git diff --check`: pass.
+
 ## Integration Plan: Rebase `dev` onto `main`
 
 ### Goal
@@ -272,6 +403,9 @@ must never remain in `runCommand` while being removed from the pre-hook boundary
 
 ## Completed
 
+- [x] Native listener supports real AF_PACKET wildcard capture with `interface: any`.
+- [x] Kernel BPF filters IPv4 UDP by destination port and optional destination IP.
+- [x] IPv6 listener policy is explicit, documented, and rejected at config load.
 - [x] Phase 1 rejects timestamps outside the symmetric past/future window.
 - [x] Phase 1 replay expiration covers each packet's complete accepted window plus guard.
 - [x] Phase 1 preserves atomic duplicate suppression under concurrency.

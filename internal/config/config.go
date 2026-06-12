@@ -62,14 +62,14 @@ type Hooks struct {
 
 // Action define una plantilla de comando y su comportamiento de reversión.
 type Action struct {
-	Command            string   `yaml:"command"`
-	RevertCommand      string   `yaml:"revert_command"`
-	RevertDelaySeconds int      `yaml:"revert_delay_seconds"`
-	TimeoutSeconds     int      `yaml:"timeout_seconds,omitempty"`
+	Command            string `yaml:"command"`
+	RevertCommand      string `yaml:"revert_command"`
+	RevertDelaySeconds int    `yaml:"revert_delay_seconds"`
+	TimeoutSeconds     int    `yaml:"timeout_seconds,omitempty"`
 	// Se cambia a puntero (*int) para distinguir entre 0 (sin cooldown explícito) y nil (usar global).
-	CooldownSeconds    *int     `yaml:"cooldown_seconds,omitempty"`
-	RunAsUser          string   `yaml:"run_as_user,omitempty"`
-	SensitiveParams    []string `yaml:"sensitive_params,omitempty"`
+	CooldownSeconds *int     `yaml:"cooldown_seconds,omitempty"`
+	RunAsUser       string   `yaml:"run_as_user,omitempty"`
+	SensitiveParams []string `yaml:"sensitive_params,omitempty"`
 
 	// --- HOOKS ESPECÍFICOS DE ACCIÓN (v2.2) ---
 	PreHook    string `yaml:"pre_hook,omitempty"`
@@ -122,8 +122,8 @@ type Listener struct {
 
 // User define un usuario autorizado.
 type User struct {
-	Name             string   `yaml:"name"`
-	PublicKeyB64     string   `yaml:"public_key"`
+	Name         string `yaml:"name"`
+	PublicKeyB64 string `yaml:"public_key"`
 	// FASE 3: Secreto TOTP (Base32) para autenticación de dos factores.
 	TotpSecret       string   `yaml:"totp_secret,omitempty"`
 	AllowedActions   []string `yaml:"actions"`
@@ -369,6 +369,9 @@ func validateConfig(cfg *Config) error {
 	if cfg.Listener.Port <= 0 || cfg.Listener.Port > 65535 {
 		return fmt.Errorf("puerto de escucha inválido: %d", cfg.Listener.Port)
 	}
+	if err := validateListenerIP(cfg.Listener.ListenIP); err != nil {
+		return err
+	}
 
 	if len(cfg.Users) == 0 {
 		return fmt.Errorf("no se han definido usuarios en la sección 'users'")
@@ -396,5 +399,20 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	return nil
+}
+
+func validateListenerIP(value string) error {
+	if value == "" {
+		return nil
+	}
+
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return fmt.Errorf("listener.listen_ip inválida: %q no es una dirección IP", value)
+	}
+	if ip.To4() == nil {
+		return fmt.Errorf("listener.listen_ip no soportada: el listener nativo es IPv4-only")
+	}
 	return nil
 }

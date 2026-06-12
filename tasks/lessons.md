@@ -1,5 +1,58 @@
 # Lessons Learned
 
+## 2026-06-12 — Wildcard capture must be link-type independent
+
+### Error o riesgo detectado
+
+The first `interface: any` fix correctly used AF_PACKET index `0`, but retained
+`SOCK_RAW` and a fixed 14-byte Ethernet layout. Packets from loopback or
+TUN-style interfaces can have different link headers, so wildcard binding alone
+did not provide wildcard processing. The same assumption also rejected VLAN
+frames in BPF before the parser could handle them.
+
+### Regla nueva
+
+When capturing across heterogeneous interfaces, normalize the link layer before
+filtering or explicitly support every link type. Kernel binding scope and
+userspace parser scope must be reviewed together.
+
+### Ejemplo
+
+GhostKnock uses AF_PACKET `SOCK_DGRAM`, which strips the physical header and
+presents one IPv4 layout to BPF and the parser across Ethernet, loopback, and
+TUN interfaces while delegating VLAN normalization to the kernel.
+
+### Archivos relacionados
+
+- `internal/listener/listener_linux.go`
+- `internal/listener/listener_test.go`
+- `tasks/research/native-listener-hardening.md`
+
+## 2026-06-12 — Verify wildcard semantics at dependency boundaries
+
+### Error o riesgo detectado
+
+The native listener represented `interface: any` with a nil
+`*net.Interface`, but the packet library dereferences that pointer before
+binding and therefore panics instead of requesting wildcard capture.
+
+### Regla nueva
+
+Before using nil or zero values to express operating-system wildcard behavior,
+verify the wrapper library's contract and add a regression test for the exact
+boundary value.
+
+### Ejemplo
+
+AF_PACKET wildcard capture uses a non-nil synthetic `net.Interface` whose
+index is `0`; tests assert both properties before the value reaches
+`packet.Listen`.
+
+### Archivos relacionados
+
+- `internal/listener/listener_linux.go`
+- `internal/listener/listener_test.go`
+
 ## 2026-06-12 — Isolate the Go build cache in managed environments
 
 ### Error o riesgo detectado

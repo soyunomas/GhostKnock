@@ -26,8 +26,9 @@ listener:
   # GhostKnock NO responde en este puerto (es silencioso/stealth).
   port: 3001
 
-  # [OPCIONAL] IP específica donde escuchar dentro de la interfaz.
+  # [OPCIONAL] IPv4 específica donde escuchar dentro de la interfaz.
   # Si se omite, escucha en todas las IPs de la interfaz seleccionada.
+  # IPv6 no está soportado por el listener actual y falla al cargar config.
   # listen_ip: "203.0.113.10"
 
 # ------------------------------------------------------------------------------
@@ -127,7 +128,7 @@ security:
   # deny_ips:
   #   - "192.168.1.55"      # IP única
   #   - "10.0.0.0/8"        # Rango completo
-  #   - "2001:db8::/32"     # IPv6 compatible
+  #   - "2001:db8::/32"     # Reservado para futuro listener IPv6; hoy no recibe tráfico IPv6
 
 # ------------------------------------------------------------------------------
 # 6. HOOKS GLOBALES (EVENT DRIVEN)
