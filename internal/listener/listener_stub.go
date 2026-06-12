@@ -15,7 +15,7 @@ func Start(ctx context.Context, listenerCfg config.Listener, pcapTimeoutMs int, 
 	// Cerramos el canal inmediatamente para no bloquear a nadie que espere leer.
 	defer close(packetsCh)
 
-	msg := "FATAL: El modo servidor de GhostKnock solo está soportado nativamente en Linux (requiere AF_PACKET/libpcap)."
+	msg := "FATAL: El modo servidor de GhostKnock solo está soportado nativamente en Linux (requiere AF_PACKET)."
 	slog.Error(msg)
 
 	// En Windows/Mac, esto debería detener la aplicación inmediatamente si intentan correr el servidor.

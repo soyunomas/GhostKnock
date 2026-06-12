@@ -1,5 +1,84 @@
 # GhostKnock Security Remediation TODO
 
+## Integration Plan: Rebase `dev` onto `main`
+
+### Goal
+
+Rebase the seven `dev` commits onto the current security-remediated `main`
+without losing either branch's behavior.
+
+### Scope
+
+- Preserve the timestamp, replay, parameter-validation, and redaction fixes.
+- Preserve the native Linux listener and cross-platform credential abstraction.
+- Keep `main` unchanged and protect both original tips with backup branches.
+- Correct integration regressions discovered by tests or semantic review.
+
+### Non-goals
+
+- Do not push or force-update `origin/dev`.
+- Do not advance the planned BPF hardening phase.
+- Do not merge branches or rewrite `main`.
+
+### Risks
+
+- The listener replacement can silently drop existing `listen_ip` semantics.
+- The documentation rewrite can overwrite security guidance from `main`.
+- Rebased history requires a force-with-lease push if published.
+
+### Verification
+
+```bash
+GOCACHE=/tmp/ghostknock-go-build go test ./... -count=1
+GOCACHE=/tmp/ghostknock-go-build go test -race ./... -count=1
+GOCACHE=/tmp/ghostknock-go-build go vet ./...
+GOCACHE=/tmp/ghostknock-go-build make build
+git range-diff b013e3a..backup/dev-before-main-rebase-20260612 main..dev
+```
+
+### Rollback
+
+Reset local `dev` to `backup/dev-before-main-rebase-20260612`; `main` is
+unchanged and also protected by `backup/main-before-dev-rebase-20260612`.
+
+### Task
+
+- [x] TASK-INTEGRATE-001: Rebase and verify `dev`
+  - Files: branch history, listener implementation/tests, integration docs.
+  - Risk: loss of security fixes or public listener configuration behavior.
+  - Tests: global test, race, vet, build, range-diff, clean worktree.
+  - Acceptance: `dev` is linear on `main`, both feature sets remain, and rollback refs exist.
+  - Status: Complete.
+  - Notes:
+    - Seven `dev` commits were rebased onto `main`; `main` was not rewritten.
+    - Backup refs preserve both original branch tips.
+    - The native listener now preserves `listen_ip` filtering and destination-port semantics.
+    - Linux tests, race tests, builds, and Windows client cross-builds pass.
+    - `go vet` retains only the pre-existing IPv6 address-format finding at
+      `cmd/ghostknock/main.go:241`.
+    - Build commands emitted non-fatal module stat-cache warnings because
+      `/home/yo/go/pkg/mod/cache` is read-only in this environment.
+
+## Result: Rebase `dev` onto `main`
+
+### Changes made
+
+- Replayed the seven `dev` commits on top of the security-remediated `main`.
+- Preserved the lowercase Go module path and all Phase 1/2 security behavior.
+- Combined the portable credential helper with the validated executor.
+- Replaced the legacy `libpcap` listener with the native Linux listener.
+- Restored `listen_ip` behavior and documented that the current parser is IPv4-only.
+- Reconciled the rewritten user guide with the security guidance from `main`.
+
+### Verification results
+
+- `go test ./... -count=1`: pass.
+- `go test -race ./... -count=1`: pass.
+- `make build`: pass.
+- `make build-windows`: pass.
+- `go vet ./...`: only the documented pre-existing IPv6 client finding remains.
+- `git range-diff`: all seven original `dev` commits are accounted for.
+
 ## Active Plan
 
 ### Goal

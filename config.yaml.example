@@ -77,10 +77,10 @@ tuning:
   # Requiere reinicio del servicio (systemctl restart).
   packet_channel_buffer: 100
 
-  # Timeout de captura de libpcap (en milisegundos).
-  # Afecta cómo el kernel entrega paquetes a la aplicación.
+  # Timeout de lectura del listener nativo (en milisegundos).
+  # El nombre pcap_timeout_ms se mantiene por compatibilidad.
   # Menor valor = Menor latencia, mayor uso de CPU.
-  # Mayor valor = Mayor latencia, menor uso de CPU (buffering del kernel).
+  # Mayor valor = Mayor latencia, menor uso de CPU.
   # Requiere reinicio del servicio.
   pcap_timeout_ms: 300
 

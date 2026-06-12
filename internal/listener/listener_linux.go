@@ -7,6 +7,7 @@ package listener
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -29,9 +30,14 @@ const (
 func Start(ctx context.Context, listenerCfg config.Listener, pcapTimeoutMs int, packetsCh chan<- PacketInfo, onDrop func()) {
 	defer close(packetsCh)
 
+	listenIP, err := parseListenIPv4(listenerCfg.ListenIP)
+	if err != nil {
+		slog.Error("FATAL: listen_ip inválida para el listener nativo", "listen_ip", listenerCfg.ListenIP, "error", err)
+		os.Exit(1)
+	}
+
 	// 1. Resolver la Interfaz de Red
 	var ifi *net.Interface
-	var err error
 	var ifaceName string
 
 	if listenerCfg.Interface == "any" || listenerCfg.Interface == "" {
@@ -68,6 +74,7 @@ func Start(ctx context.Context, listenerCfg config.Listener, pcapTimeoutMs int, 
 	slog.Info("Iniciando escucha pasiva (Nativo/AF_PACKET)",
 		"interface", ifaceName,
 		"udp_port", listenerCfg.Port,
+		"listen_ip", listenerCfg.ListenIP,
 		"mode", "Zero-Copy Parser")
 
 	// 3. Buffer de Lectura (Hot Path)
@@ -105,12 +112,8 @@ func Start(ctx context.Context, listenerCfg config.Listener, pcapTimeoutMs int, 
 		}
 
 		// Procesamos solo los bytes leídos (buf[:n])
-		validPacket, info := parsePacket(buf[:n], listenerCfg.Port)
+		validPacket, info := parsePacket(buf[:n], listenerCfg.Port, listenIP)
 		if validPacket {
-			// Filtro adicional de IP destino si está configurado (Stealth estricto)
-			// (Opcional: Si listenerCfg.ListenIP está seteado, podríamos filtrar aquí,
-			// pero el firewall del usuario ya debería encargarse. Lo dejamos pasar al core).
-
 			// Envío NO BLOQUEANTE al canal de procesamiento
 			select {
 			case packetsCh <- info:
@@ -125,9 +128,25 @@ func Start(ctx context.Context, listenerCfg config.Listener, pcapTimeoutMs int, 
 	}
 }
 
+func parseListenIPv4(value string) (net.IP, error) {
+	if value == "" {
+		return nil, nil
+	}
+
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return nil, fmt.Errorf("must be a valid IP address")
+	}
+	ip = ip.To4()
+	if ip == nil {
+		return nil, fmt.Errorf("IPv6 is not supported by the native listener")
+	}
+	return ip, nil
+}
+
 // parsePacket implementa un parser manual de headers para evitar allocs.
 // Retorna true y la struct si el paquete es un candidato válido (UDP + Puerto correcto).
-func parsePacket(data []byte, targetPort int) (bool, PacketInfo) {
+func parsePacket(data []byte, targetPort int, targetIP net.IP) (bool, PacketInfo) {
 	// --- CAPA 1: ETHERNET ---
 	// Longitud mínima: Header Ethernet (14 bytes)
 	if len(data) < 14 {
@@ -170,6 +189,9 @@ func parsePacket(data []byte, targetPort int) (bool, PacketInfo) {
 
 	// Validar Protocolo (Byte 9). UDP = 17.
 	if ipHeader[9] != ipProtoUDP {
+		return false, PacketInfo{}
+	}
+	if targetIP != nil && !net.IP(ipHeader[16:20]).Equal(targetIP) {
 		return false, PacketInfo{}
 	}
 

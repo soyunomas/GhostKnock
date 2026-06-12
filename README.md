@@ -16,14 +16,14 @@ El servidor escucha pasivamente el tráfico. Si recibe un paquete con una firma 
 
 *   🛡️ **Invisible por Diseño (Stealth):**
     *   **Sin Sockets Abiertos:** El servidor no hace `bind` al puerto en la tabla de procesos del sistema operativo. No aparecerá como "LISTEN" en herramientas modernas como `ss` (Socket Statistics) ni en la antigua `netstat`.
-    *   **Indetectable externamente:** Ante un escaneo de red (Nmap), el puerto parecerá estar **cerrado** o filtrado. El servidor captura los paquetes desde la capa de red (PCAP), procesando silenciosamente solo los legítimos y descartando el resto sin emitir respuesta.
+    *   **Indetectable externamente:** Ante un escaneo de red (Nmap), el puerto parecerá estar **cerrado** o filtrado. El servidor captura los paquetes desde la capa de enlace con `AF_PACKET`, procesando silenciosamente solo los legítimos y descartando el resto sin emitir respuesta.
 
 *   🚀 **Monitorización Pasiva y Eficiente:**
-    *   **Filtrado en Origen:** GhostKnock aplica filtros a nivel de sistema operativo (BPF). El kernel solo notifica a la aplicación cuando llega un paquete UDP al puerto exacto, garantizando un consumo de CPU prácticamente nulo incluso en redes con mucho tráfico.
+    *   **Filtrado Temprano:** El parser nativo descarta tramas que no sean IPv4/UDP, no estén dirigidas al puerto configurado o no coincidan con `listen_ip`.
     *   **Protección Short-Circuit:** Capacidad de definir una lista negra (`deny_ips`) que descarta tráfico de atacantes conocidos *antes* de realizar cualquier operación criptográfica, ahorrando recursos de CPU.
 
 *   🔧 **Tuning y Escalabilidad:**
-    *   **Gestión de Recursos:** Sección `tuning` dedicada para ajustar buffers de red, timeouts de captura (`pcap`) y límites de memoria. Permite escalar desde dispositivos IoT (Raspberry Pi) hasta servidores Enterprise con alto tráfico.
+    *   **Gestión de Recursos:** Sección `tuning` dedicada para ajustar buffers de red, timeouts de lectura y límites de memoria. Permite escalar desde dispositivos IoT (Raspberry Pi) hasta servidores Enterprise con alto tráfico.
     *   **Logging Flexible:** Soporte nativo para logs estructurados en **JSON** (para SIEMs como ELK/Datadog) y redirección a `stdout` o ficheros.
 
 *   🔐 **Seguridad y Privacidad (Hardening):**
@@ -116,7 +116,7 @@ sudo ufw reload
 ### Si usas iptables puro
 ```bash
 # Insertar regla para DESCARTAR paquetes.
-# GhostKnock (libpcap) verá el paquete antes de que iptables lo tire.
+# GhostKnock (AF_PACKET) verá el paquete antes de que iptables lo descarte.
 sudo iptables -I INPUT -p udp --dport 3001 -j DROP
 ```
 
@@ -395,7 +395,7 @@ Aquí tienes la sección completa **## ⚙️ Referencia de Configuración Compl
 | *(Raíz)* | `server_private_key_path` | string | ✅ | Ruta a la clave privada del servidor. |
 | **`listener`** | `interface` | string | ✅ | Interfaz de red (ej: `eth0`, `any`). **Requiere restart.** |
 | | `port` | int | ✅ | Puerto UDP. **Requiere restart.** |
-| | `listen_ip` | string | ❌ | Escuchar solo en una IP específica. |
+| | `listen_ip` | string | ❌ | Escuchar solo en una IPv4 específica. |
 | **`logging`** | `log_level` | string | ❌ | Nivel: `debug`, `info`, `warn`, `error`. |
 | | `log_file` | string | ❌ | Ruta, `stdout` o `/dev/null`. |
 | | `log_format` | string | ❌ | `text` o `json`. |
@@ -403,7 +403,7 @@ Aquí tienes la sección completa **## ⚙️ Referencia de Configuración Compl
 | | `shell_path` | string | ❌ | Intérprete de comandos (default: `/bin/sh`). |
 | | `shell_flag` | string | ❌ | Flag de ejecución (default: `-c`). |
 | **`tuning`** | `packet_channel_buffer` | int | ❌ | Buffer de paquetes UDP. **Requiere restart.** |
-| | `pcap_timeout_ms` | int | ❌ | Latencia de captura. **Requiere restart.** |
+| | `pcap_timeout_ms` | int | ❌ | Timeout de lectura del listener (nombre legacy). **Requiere restart.** |
 | | `max_tracked_ips` | int | ❌ | Límite de IPs en memoria (Anti-OOM). |
 | | `eviction_batch_size` | int | ❌ | IPs a purgar por lote. |
 | **`security`** | `deny_ips` | list | ❌ | Lista negra de IPs o rangos CIDR (ej: `["1.2.3.4", "10.0.0.0/8"]`). Drop instantáneo. |

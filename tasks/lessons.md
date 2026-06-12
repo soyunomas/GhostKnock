@@ -77,3 +77,27 @@ the whole root context.
 - `internal/config/template_params.go`
 - `internal/executor/validation.go`
 - `internal/executor/executor.go`
+
+## 2026-06-12 — Preserve configuration semantics across implementation replacements
+
+### Error o riesgo detectado
+
+Rebasing the native `AF_PACKET` listener over the previous `libpcap` listener
+kept destination-port filtering but silently stopped honoring `listen_ip`.
+
+### Regla nueva
+
+When one subsystem replaces another, compare every public configuration field
+and security invariant, not only whether the new implementation compiles.
+
+### Ejemplo
+
+The native packet parser must reject a packet whose destination IP differs from
+configured `listener.listen_ip`, even though it already validates the UDP
+destination port.
+
+### Archivos relacionados
+
+- `internal/listener/listener_linux.go`
+- `internal/listener/listener_test.go`
+- `internal/config/config.go`

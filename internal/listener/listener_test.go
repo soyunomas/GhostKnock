@@ -10,7 +10,7 @@ import (
 )
 
 // constructPacket es un helper para fabricar paquetes raw para testing sin usar gopacket
-func constructPacket(ethType uint16, vlanID int, proto uint8, srcIP, dstIP net.IP, dstPort int, payload []byte) []byte {
+func constructPacket(ethType uint16, vlanID int, proto uint8, srcIP, dstIP net.IP, srcPort, dstPort int, payload []byte) []byte {
 	buf := new(bytes.Buffer)
 
 	// --- ETHERNET ---
@@ -56,7 +56,7 @@ func constructPacket(ethType uint16, vlanID int, proto uint8, srcIP, dstIP net.I
 	}
 
 	// --- UDP HEADER (8 bytes) ---
-	binary.Write(buf, binary.BigEndian, uint16(12345))   // SrcPort
+	binary.Write(buf, binary.BigEndian, uint16(srcPort)) // SrcPort
 	binary.Write(buf, binary.BigEndian, uint16(dstPort)) // DstPort
 
 	// UDP Length (Header + Payload)
@@ -80,48 +80,61 @@ func TestParsePacket(t *testing.T) {
 	tests := []struct {
 		name       string
 		packetData []byte
+		targetIP   net.IP
 		wantValid  bool
 	}{
 		{
 			name:       "Valid IPv4 UDP Packet",
-			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, targetPort, payload),
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, 12345, targetPort, payload),
 			wantValid:  true,
 		},
 		{
 			name:       "Valid VLAN Tagged Packet",
-			packetData: constructPacket(0x0800, 10, 17, srcIP, dstIP, targetPort, payload),
+			packetData: constructPacket(0x0800, 10, 17, srcIP, dstIP, 12345, targetPort, payload),
 			wantValid:  true,
 		},
 		{
+			name:       "Configured Destination IP Matches",
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, 12345, targetPort, payload),
+			targetIP:   dstIP,
+			wantValid:  true,
+		},
+		{
+			name:       "Configured Destination IP Does Not Match",
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, 12345, targetPort, payload),
+			targetIP:   net.IP{10, 0, 0, 2},
+			wantValid:  false,
+		},
+		{
 			name:       "Invalid EtherType (ARP)",
-			packetData: constructPacket(0x0806, 0, 0, nil, nil, 0, nil),
+			packetData: constructPacket(0x0806, 0, 0, nil, nil, 0, 0, nil),
 			wantValid:  false,
 		},
 		{
 			name:       "Invalid Protocol (TCP)",
-			packetData: constructPacket(0x0800, 0, 6, srcIP, dstIP, targetPort, payload),
+			packetData: constructPacket(0x0800, 0, 6, srcIP, dstIP, 12345, targetPort, payload),
 			wantValid:  false,
 		},
 		{
-			name:       "Wrong Destination Port",
-			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, 9999, payload),
+			name:       "Source Port Match Does Not Bypass Destination Port",
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, targetPort, 9999, payload),
 			wantValid:  false,
 		},
 		{
 			name:       "Empty Payload",
-			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, targetPort, []byte{}),
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, 12345, targetPort, []byte{}),
 			wantValid:  false,
 		},
 		{
 			name:       "Truncated Packet (Header Only)",
-			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, targetPort, payload)[:30], // Cortamos a la mitad
+			packetData: constructPacket(0x0800, 0, 17, srcIP, dstIP, 12345, targetPort, payload)[:30], // Cortamos a la mitad
 			wantValid:  false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			valid, info := parsePacket(tt.packetData, targetPort)
+			valid, info := parsePacket(tt.packetData, targetPort, tt.targetIP)
 			if valid != tt.wantValid {
 				t.Errorf("parsePacket() valid = %v, want %v", valid, tt.wantValid)
 			}
@@ -132,6 +145,32 @@ func TestParsePacket(t *testing.T) {
 				if !info.SourceIP.Equal(srcIP.To4()) {
 					t.Errorf("Source IP mismatch. Got %v, want %v", info.SourceIP, srcIP)
 				}
+			}
+		})
+	}
+}
+
+func TestParseListenIPv4(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantIP  net.IP
+		wantErr bool
+	}{
+		{name: "Empty", value: ""},
+		{name: "IPv4", value: "203.0.113.10", wantIP: net.IP{203, 0, 113, 10}},
+		{name: "Invalid", value: "not-an-ip", wantErr: true},
+		{name: "IPv6 Unsupported", value: "2001:db8::1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseListenIPv4(tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseListenIPv4() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !got.Equal(tt.wantIP) {
+				t.Fatalf("parseListenIPv4() = %v, want %v", got, tt.wantIP)
 			}
 		})
 	}

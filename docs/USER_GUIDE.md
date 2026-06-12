@@ -47,7 +47,9 @@ A diferencia de las aplicaciones estándar que abren un socket y esperan conexio
 #### B. Pipeline de Procesamiento "Fail-Fast"
 Para garantizar la resistencia ante ataques de Denegación de Servicio (DoS), el servidor procesa cada paquete en un pipeline estricto de cinco etapas, diseñado para descartar tráfico ilegítimo con el mínimo coste computacional:
 
-1.  **Filtrado en Hardware/Kernel (BPF):** El sistema operativo aplica un filtro Berkeley Packet Filter. El proceso de usuario solo es notificado si el paquete es UDP y va dirigido al puerto específico. Todo el resto del tráfico de red es ignorado a nivel de driver.
+1.  **Filtrado temprano en el parser nativo:** El listener descarta tramas que no
+    sean IPv4/UDP, no estén dirigidas al puerto configurado o no coincidan con
+    `listen_ip` cuando esté definido.
 2.  **Lista Negra (Short-Circuit):** Se verifica la IP de origen contra la lista `deny_ips`. Si coincide, se descarta instantáneamente en memoria.
 3.  **Rate Limiting (Token Bucket):** Se aplica un límite de velocidad por IP. Si una IP inunda el servidor, sus paquetes se descartan antes de llegar a la capa criptográfica.
 4.  **Verificación de Firma (Ed25519):** El servidor comprueba la firma digital del paquete. **Esta es la barrera crítica:** si la firma no es matemáticamente válida, el paquete se elimina sin intentar descifrarlo, protegiendo la CPU contra el agotamiento.
@@ -205,7 +207,7 @@ Para que GhostKnock sea invisible, **el sistema operativo debe ignorar el puerto
 **Ejemplo con IPTABLES:**
 ```bash
 # Descartar todo el tráfico al puerto 3001.
-# GhostKnock verá el paquete ANTES de que iptables lo tire gracias a AF_PACKET/PCAP.
+# GhostKnock verá el paquete antes de que iptables lo descarte gracias a AF_PACKET.
 sudo iptables -I INPUT -p udp --dport 3001 -j DROP
 ```
 
@@ -221,7 +223,7 @@ listener:
 tuning:
   packet_channel_buffer: 100   # Buffer para ráfagas de tráfico
   max_tracked_ips: 20000       # Límite de memoria para anti-DoS
-  pcap_timeout_ms: 300         # Latencia de captura
+  pcap_timeout_ms: 300         # Timeout de lectura (nombre legacy)
 
 security:
   deny_ips: ["1.2.3.4", "10.0.0.0/8"] # Blacklist (Drop instantáneo)
@@ -557,7 +559,8 @@ Para prevenir ataques de denegación de servicio que intenten agotar la memoria 
 *   **`packet_channel_buffer` (Default: 100):**
     Es la cola interna entre el listener (captura) y los workers (criptografía). Un valor alto absorbe mejor las ráfagas repentinas de tráfico (bursts), evitando la pérdida de paquetes legítimos durante picos de carga.
 *   **`pcap_timeout_ms` (Default: 300ms):**
-    Controla el buffering del kernel y la frecuencia de interrupciones de la CPU.
+    Mantiene su nombre por compatibilidad y controla el deadline de lectura del
+    listener nativo.
     *   *Bajo (10ms):* Reacción casi instantánea, mayor uso de CPU. Ideal para tiempo real.
     *   *Alto (1000ms):* El sistema "duerme" más, ahorrando CPU. Mayor latencia de reacción.
 
@@ -731,7 +734,7 @@ Si una acción no se ejecuta, siga este orden estricto para aislar el problema:
     *   **Solución:** Cambie a `interface: "any"` temporalmente para probar.
 
 3.  **Conflicto de Firewall Local (UFW/Iptables):**
-    Aunque GhostKnock usa captura cruda (BPF), ciertas configuraciones agresivas de `nftables` o `RP_FILTER` pueden descartar paquetes antes de la captura.
+    Aunque GhostKnock usa captura cruda con `AF_PACKET`, ciertas configuraciones agresivas de `nftables` o `RP_FILTER` pueden afectar la recepción del tráfico.
     *   Asegúrese de que la regla sea `DROP` y no `REJECT`.
     *   Asegúrese de no tener reglas de *pre-routing* que desvíen el tráfico.
 
