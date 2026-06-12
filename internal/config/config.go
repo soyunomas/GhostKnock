@@ -89,6 +89,7 @@ type Security struct {
 	DefaultActionCooldownSeconds int     `yaml:"default_action_cooldown_seconds"`
 	RateLimitPerSecond           float64 `yaml:"rate_limit_per_second"`
 	RateLimitBurst               int     `yaml:"rate_limit_burst"`
+	replayWindowConfigured       bool    `yaml:"-"`
 
 	// --- NUEVO: Lista Negra (Blacklist) ---
 	// Lista cruda del YAML (ej. "1.2.3.4", "10.0.0.0/8")
@@ -210,7 +211,7 @@ func LoadConfig(path string) (*Config, error) {
 	// =========================================================================
 
 	// --- Security Defaults ---
-	if cfg.Security.ReplayWindowSeconds == 0 {
+	if !cfg.Security.replayWindowConfigured {
 		cfg.Security.ReplayWindowSeconds = 5
 	}
 	if cfg.Security.DefaultActionCooldownSeconds == 0 {
@@ -302,6 +303,9 @@ func LoadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("error de sintaxis en el template de la acción '%s': %w", name, err)
 		}
 		action.CommandTmpl = tmpl
+		if _, err := RequiredTemplateParams(tmpl); err != nil {
+			return nil, fmt.Errorf("template inseguro en la acción '%s': %w", name, err)
+		}
 
 		// Compilar Comando de Reversión (si existe)
 		if action.RevertCommand != "" {
@@ -310,6 +314,9 @@ func LoadConfig(path string) (*Config, error) {
 				return nil, fmt.Errorf("error de sintaxis en el template de reversión de la acción '%s': %w", name, err)
 			}
 			action.RevertCommandTmpl = revTmpl
+			if _, err := RequiredTemplateParams(revTmpl); err != nil {
+				return nil, fmt.Errorf("template de reversión inseguro en la acción '%s': %w", name, err)
+			}
 		}
 
 		// Guardar cambios en el mapa (necesario porque 'action' es una copia del valor)
@@ -344,6 +351,10 @@ func (c *Config) IsIPDenied(ip net.IP) bool {
 }
 
 func validateConfig(cfg *Config) error {
+	if err := validateReplayWindowSeconds(cfg.Security.ReplayWindowSeconds); err != nil {
+		return err
+	}
+
 	if cfg.ServerPrivateKeyPath == "" {
 		return errors.New("el campo 'server_private_key_path' es obligatorio en la configuración")
 	}
@@ -367,6 +378,9 @@ func validateConfig(cfg *Config) error {
 	}
 
 	for actionName, action := range cfg.Actions {
+		if err := validateSensitiveParams(action.SensitiveParams); err != nil {
+			return fmt.Errorf("la acción '%s' tiene sensitive_params inválidos: %w", actionName, err)
+		}
 		if action.RunAsUser != "" {
 			if _, err := user.Lookup(action.RunAsUser); err != nil {
 				return fmt.Errorf("la acción '%s' especifica 'run_as_user' con un usuario ('%s') que no existe en el sistema: %w", actionName, action.RunAsUser, err)

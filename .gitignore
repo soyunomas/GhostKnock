@@ -1,0 +1,42 @@
+# Configuración local / sensible
+config.yaml
+profiles.yaml
+test.yaml
+
+# Binaries compilados
+/ghostknock
+/ghostknockd
+/ghostknock-keygen
+*.exe
+*.out
+
+# Directorios de build / paquetes
+bin/
+build/
+dist/
+release/
+*.deb
+*.rpm
+*.tar.gz
+*.zip
+
+# Go
+coverage.out
+*.cover
+*.test
+go.work
+go.work.sum
+
+# Logs y temporales
+*.log
+*.tmp
+tmp/
+.cache/
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

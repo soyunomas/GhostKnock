@@ -47,10 +47,10 @@ daemon:
 # los valores por defecto, que ya son seguros.
 #
 # security:
-#   # Ventana de tiempo (en segundos) para aceptar un knock. Un paquete más antiguo
-#   # que esto será rechazado para prevenir ataques de repetición (replay).
-#   # Aumentar solo si hay un desfase horario significativo entre cliente y servidor.
-#   # Por defecto: 5
+#   # Ventana temporal simétrica (en segundos) para aceptar un knock. Se rechazan
+#   # timestamps más antiguos que now-X y más futuros que now+X.
+#   # Mantenga los relojes sincronizados con NTP y aumente este valor solo si es necesario.
+#   # Rango válido: 1-3600. Por defecto: 5. Requiere reiniciar el daemon.
 #   replay_window_seconds: 5
 #
 #   # Cooldown global (en segundos) que se aplica a cualquier acción que no defina

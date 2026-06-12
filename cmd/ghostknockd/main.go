@@ -36,6 +36,8 @@ var version = "dev"
 // Default fallback si no hay config
 const defaultLogFilePath = "/var/log/ghostknockd.log"
 
+const replayCacheGuard = time.Second
+
 // ipLimiter almacena el estado de rate limit por IP
 type ipLimiter struct {
 	limiter  *rate.Limiter
@@ -297,9 +299,12 @@ func (s *Server) reloadConfig() {
 	if newCfg.Tuning.PcapTimeoutMs != s.config.Tuning.PcapTimeoutMs {
 		needsRestart = true
 	}
+	if preserveReplayWindowOnReload(s.config, newCfg) {
+		needsRestart = true
+	}
 
 	if needsRestart {
-		slog.Warn("RELOAD PARCIAL: Se han detectado cambios en Network o Tuning (Buffer/Timeout). Estos cambios NO se aplican en caliente. Reinicie el servicio (systemctl restart) para aplicarlos.")
+		slog.Warn("RELOAD PARCIAL: Se han detectado cambios en Network, Tuning (Buffer/Timeout) o Replay Window. Estos cambios NO se aplican en caliente. Reinicie el servicio (systemctl restart) para aplicarlos.")
 	}
 
 	// Aplicar nueva configuración lógica
@@ -311,6 +316,14 @@ func (s *Server) reloadConfig() {
 	slog.Info("Configuración recargada exitosamente.",
 		"users_count", len(newCfg.Users),
 		"actions_count", len(newCfg.Actions))
+}
+
+func preserveReplayWindowOnReload(current, next *config.Config) bool {
+	if next.Security.ReplayWindowSeconds == current.Security.ReplayWindowSeconds {
+		return false
+	}
+	next.Security.ReplayWindowSeconds = current.Security.ReplayWindowSeconds
+	return true
 }
 
 // getConfig obtiene una instantánea segura de la configuración actual
@@ -354,6 +367,84 @@ func (s *Server) getLimiter(ip net.IP, limit float64, burst int, tuning config.T
 	return newLimiter
 }
 
+func validatePayloadFreshness(now time.Time, payloadTS int64, pastWindow, futureSkew time.Duration) error {
+	if pastWindow <= 0 {
+		return fmt.Errorf("past window must be positive")
+	}
+	if futureSkew < 0 {
+		return fmt.Errorf("future skew cannot be negative")
+	}
+
+	timestamp := time.Unix(0, payloadTS)
+	if timestamp.Before(now.Add(-pastWindow)) {
+		return fmt.Errorf("payload timestamp is older than the accepted window")
+	}
+	if timestamp.After(now.Add(futureSkew)) {
+		return fmt.Errorf("payload timestamp is newer than the accepted clock skew")
+	}
+	return nil
+}
+
+func replayWindowDuration(seconds int) (time.Duration, error) {
+	if seconds <= 0 || seconds > config.MaxReplayWindowSeconds {
+		return 0, fmt.Errorf(
+			"replay window must be between 1 and %d seconds",
+			config.MaxReplayWindowSeconds,
+		)
+	}
+	return time.Duration(seconds) * time.Second, nil
+}
+
+func replayCacheExpiration(now time.Time, payloadTS int64, pastWindow, guard time.Duration) (time.Time, error) {
+	if pastWindow <= 0 {
+		return time.Time{}, fmt.Errorf("past window must be positive")
+	}
+	if guard <= 0 {
+		return time.Time{}, fmt.Errorf("replay cache guard must be positive")
+	}
+
+	timestamp := time.Unix(0, payloadTS)
+	expiration := timestamp.Add(pastWindow).Add(guard)
+	minExpiration := now.Add(guard)
+	if expiration.Before(minExpiration) {
+		expiration = minExpiration
+	}
+	return expiration, nil
+}
+
+func (s *Server) isSignatureKnown(signature []byte) bool {
+	s.cacheMutex.RLock()
+	defer s.cacheMutex.RUnlock()
+	_, known := s.signaturesCache[string(signature)]
+	return known
+}
+
+func (s *Server) storeSignatureIfNew(signature []byte, expiration time.Time) bool {
+	s.cacheMutex.Lock()
+	defer s.cacheMutex.Unlock()
+
+	key := string(signature)
+	if _, exists := s.signaturesCache[key]; exists {
+		return false
+	}
+	if s.signaturesCache == nil {
+		s.signaturesCache = make(map[string]time.Time)
+	}
+	s.signaturesCache[key] = expiration
+	return true
+}
+
+func purgeExpiredSignatures(signatures map[string]time.Time, now time.Time) int {
+	purged := 0
+	for signature, expiration := range signatures {
+		if !now.Before(expiration) {
+			delete(signatures, signature)
+			purged++
+		}
+	}
+	return purged
+}
+
 // processKnock maneja la lógica de negocio
 func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	atomic.AddUint64(&s.processedPackets, 1)
@@ -384,11 +475,7 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	sigBytes := packetInfo.Payload[:ed25519.SignatureSize]
 
 	// 4. CACHÉ CHECK 1 (Read Lock - Barato)
-	s.cacheMutex.RLock()
-	_, known := s.signaturesCache[string(sigBytes)]
-	s.cacheMutex.RUnlock()
-
-	if known {
+	if s.isSignatureKnown(sigBytes) {
 		slog.Debug("Replay detectado (Fast-Path)", "src", packetInfo.SourceIP)
 		return
 	}
@@ -411,6 +498,13 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		return // Firma inválida o basura
 	}
 
+	// Validar claves, valores y colisiones antes de extraer TOTP. De este modo
+	// `otp` y `OTP` no pueden converger después en la misma variable de entorno.
+	if err := executor.ValidateParams(payload.Params); err != nil {
+		slog.Warn("Parámetros inválidos; paquete rechazado", "user", authorizedUser.Name)
+		return
+	}
+
 	// 6. VALIDACIÓN 2FA (TOTP) - FASE 3
 	if authorizedUser.TotpSecret != "" {
 		otpCode, ok := payload.Params["otp"]
@@ -428,24 +522,32 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 		delete(payload.Params, "otp")
 		slog.Debug("2FA (TOTP) verificado correctamente", "user", authorizedUser.Name)
 	}
-
-	// 7. CACHÉ CHECK 2 + STORE (Write Lock - Atómico)
-	ttl := time.Duration(currentConfig.Security.ReplayWindowSeconds+1) * time.Second
-	expiration := time.Now().Add(ttl)
-
-	s.cacheMutex.Lock()
-	if _, exists := s.signaturesCache[string(sigBytes)]; exists {
-		s.cacheMutex.Unlock()
-		slog.Warn("Replay detectado (Race-Win)", "user", authorizedUser.Name)
+	if containsParamFold(payload.Params, "otp") {
+		slog.Warn("Parámetro reservado presente; paquete rechazado", "user", authorizedUser.Name)
 		return
 	}
-	s.signaturesCache[string(sigBytes)] = expiration
-	s.cacheMutex.Unlock()
 
-	// 8. Validación Timestamp del Payload
-	ts := time.Unix(0, payload.Timestamp)
-	if time.Since(ts) > time.Duration(currentConfig.Security.ReplayWindowSeconds)*time.Second {
-		slog.Warn("Paquete expirado (Timestamp fuera de ventana)", "user", authorizedUser.Name)
+	// 7. Validación explícita del Timestamp del Payload
+	window, err := replayWindowDuration(currentConfig.Security.ReplayWindowSeconds)
+	if err != nil {
+		slog.Error("Configuración temporal inválida; paquete rechazado", "error", err)
+		return
+	}
+	futureSkew := window
+	now := time.Now()
+	if err := validatePayloadFreshness(now, payload.Timestamp, window, futureSkew); err != nil {
+		slog.Warn("Paquete fuera de ventana temporal", "user", authorizedUser.Name)
+		return
+	}
+
+	// 8. CACHÉ CHECK 2 + STORE (Write Lock - Atómico)
+	expiration, err := replayCacheExpiration(now, payload.Timestamp, window, replayCacheGuard)
+	if err != nil {
+		slog.Error("Configuración temporal inválida; paquete rechazado", "error", err)
+		return
+	}
+	if !s.storeSignatureIfNew(sigBytes, expiration) {
+		slog.Warn("Replay detectado (Race-Win)", "user", authorizedUser.Name)
 		return
 	}
 
@@ -485,6 +587,15 @@ func (s *Server) processKnock(packetInfo listener.PacketInfo) {
 	default:
 		slog.Error("Ejecución rechazada: Límite de procesos concurrentes alcanzado", "user", authorizedUser.Name)
 	}
+}
+
+func containsParamFold(params map[string]string, target string) bool {
+	for key := range params {
+		if strings.EqualFold(key, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkActionAuthAndCooldown usa el snapshot de configuración pasado
@@ -596,11 +707,7 @@ func (s *Server) startCacheCleaner(ctx context.Context) {
 			s.cacheMutex.Lock()
 			now := time.Now()
 			// Limpiar firmas (Replay attack cache)
-			for sig, exp := range s.signaturesCache {
-				if now.After(exp) {
-					delete(s.signaturesCache, sig)
-				}
-			}
+			purgeExpiredSignatures(s.signaturesCache, now)
 			// Limpiar cooldowns antiguos (si > 24h, hardcoded safe limit)
 			for key, t := range s.actionCooldowns {
 				if time.Since(t) > 24*time.Hour {
@@ -617,7 +724,7 @@ func (s *Server) startCacheCleaner(ctx context.Context) {
 func validateTOTP(secret, passcode string) bool {
 	// Limpieza del secreto (eliminar espacios y convertir a mayúsculas)
 	secret = strings.ToUpper(strings.ReplaceAll(secret, " ", ""))
-	
+
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
 	if err != nil {
 		// Intentar con padding estándar si falla

@@ -106,9 +106,9 @@ tuning:
 # 5. SEGURIDAD
 # ------------------------------------------------------------------------------
 security:
-  # Ventana de tiempo (segundos) para prevenir ataques de repetición (Replay Attacks).
-  # El servidor descartará paquetes generados hace más de X segundos.
-  # Nota: Requiere relojes sincronizados (NTP).
+  # Ventana temporal simétrica para prevenir ataques de repetición.
+  # Se rechazan timestamps anteriores a now-X y posteriores a now+X segundos.
+  # Rango válido: 1-3600. Requiere NTP y reiniciar el daemon para cambiarla.
   replay_window_seconds: 5
 
   # Tiempo de espera por defecto (segundos) entre ejecuciones de acciones.
@@ -135,6 +135,9 @@ security:
 # Scripts externos que se ejecutan en respuesta a eventos del sistema.
 # Reciben contexto mediante variables de entorno:
 # GK_USER, GK_IP, GK_ACTION, GK_STATUS, GK_STAGE, GK_PARAM_NOMBRE.
+# Los nombres y valores de params se validan antes de ejecutar cualquier hook.
+# "otp" está reservado para 2FA y no se exporta como GK_PARAM_OTP.
+# En scripts shell, cite siempre "$GK_PARAM_NOMBRE" y no use eval.
 #
 # hooks:
 #   # Se ejecuta ANTES de cualquier acción. Si devuelve exit code != 0, cancela todo.
@@ -177,6 +180,9 @@ users:
 # ------------------------------------------------------------------------------
 # Define qué comandos se pueden ejecutar.
 # Variables disponibles en comandos: {{.SourceIP}}, {{.Params.nombre_parametro}}
+# Nombres de params: ^[A-Za-z_][A-Za-z0-9_]{0,63}$
+# Valores de params: ^[A-Za-z0-9._][A-Za-z0-9._-]*$ y distintos de ".."
+# Use acceso directo {{.Params.nombre}}; no se permiten accesos dinámicos con index.
 actions:
 
   # EJEMPLO 1: Acción básica con reversión

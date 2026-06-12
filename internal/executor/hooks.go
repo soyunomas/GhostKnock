@@ -13,13 +13,14 @@ import (
 
 // HookContext define el contexto de datos que se inyectará al script del hook como variables de entorno.
 type HookContext struct {
-	User     string
-	ActionID string
-	SourceIP string
-	Stage    string            // Ej: "global_pre", "action_post", "global_revert"
-	Status   string            // "success", "error"
-	ErrorMsg string            // Detalle del error si Status == "error"
-	Params   map[string]string // Parámetros crudos del knock
+	User            string
+	ActionID        string
+	SourceIP        string
+	Stage           string            // Ej: "global_pre", "action_post", "global_revert"
+	Status          string            // "success", "error"
+	ErrorMsg        string            // Detalle del error si Status == "error"
+	Params          map[string]string // Parámetros crudos del knock
+	SensitiveParams []string          // Claves cuyos valores deben ocultarse en logs
 }
 
 // RunHook ejecuta un script externo inyectando el contexto mediante variables de entorno.
@@ -27,6 +28,9 @@ type HookContext struct {
 func RunHook(scriptPath string, ctx HookContext) error {
 	if scriptPath == "" {
 		return nil
+	}
+	if err := ValidateParams(ctx.Params); err != nil {
+		return err
 	}
 
 	// Timeout de seguridad: 5 segundos. Un hook no debe colgar el sistema.
@@ -58,6 +62,7 @@ func RunHook(scriptPath string, ctx HookContext) error {
 
 	// Ejecutamos y capturamos salida combinada (stdout + stderr)
 	output, err := cmd.CombinedOutput()
+	safeOutput := redactText(string(output), ctx.Params, ctx.SensitiveParams)
 
 	if err != nil {
 		// Comprobamos si falló por timeout
@@ -73,13 +78,13 @@ func RunHook(scriptPath string, ctx HookContext) error {
 			"stage", ctx.Stage,
 			"script", scriptPath,
 			"error", err,
-			"output", string(output))
+			"output", safeOutput)
 		return fmt.Errorf("hook execution failed: %w", err)
 	}
 
 	// Si hay salida en stdout/stderr y el hook fue exitoso, la registramos en nivel Debug
-	if len(output) > 0 {
-		slog.Debug("Hook output", "stage", ctx.Stage, "output", string(output))
+	if safeOutput != "" {
+		slog.Debug("Hook output", "stage", ctx.Stage, "output", safeOutput)
 	}
 
 	return nil

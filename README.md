@@ -250,6 +250,23 @@ Los scripts reciben automáticamente el contexto de ejecución:
 | `GK_STATUS` | Resultado final: `success` o `error`. |
 | `GK_PARAM_*` | Parámetros dinámicos en mayúsculas (ej: `-args "target=1.1.1.1"` -> `GK_PARAM_TARGET`). |
 
+Los nombres y valores se validan **antes de ejecutar cualquier hook**:
+
+* Nombres: `^[A-Za-z_][A-Za-z0-9_]{0,63}$`.
+* Valores: `^[A-Za-z0-9._][A-Za-z0-9._-]*$`; no se acepta `..`.
+* No se permiten claves que colisionen al convertirse a mayúsculas, como `target` y `TARGET`.
+* `otp` está reservado para 2FA y no se expone como `GK_PARAM_OTP`.
+* Los templates deben usar acceso directo, como `{{.Params.target}}`; no se admite `index`.
+* Los valores incluidos en `sensitive_params` también se ocultan en stdout/stderr de comandos y hooks.
+
+En scripts shell, cita siempre las variables y no uses `eval`:
+
+```sh
+#!/bin/sh
+set -eu
+printf '%s\n' "${GK_PARAM_TARGET:-}"
+```
+
 ---
 
 ## 💡 Recetario: Ejemplos Prácticos para SysAdmins
@@ -350,7 +367,7 @@ Crea un usuario de emergencia. El uso de `sensitive_params` asegura que la contr
     ```
 *   **Comando Cliente:**
     ```bash
-    ghostknock -profile prod -action create-admin -args "user=support_ops,pass=R3scat3_X7z!"
+    ghostknock -profile prod -action create-admin -args "user=support_ops,pass=R3scat3_X7z"
     ```
     *Log del servidor:* `Ejecutando comando: [REDACTADO] ... params: {user: support_ops, pass: *****}`
     
@@ -390,7 +407,7 @@ Aquí tienes la sección completa **## ⚙️ Referencia de Configuración Compl
 | | `max_tracked_ips` | int | ❌ | Límite de IPs en memoria (Anti-OOM). |
 | | `eviction_batch_size` | int | ❌ | IPs a purgar por lote. |
 | **`security`** | `deny_ips` | list | ❌ | Lista negra de IPs o rangos CIDR (ej: `["1.2.3.4", "10.0.0.0/8"]`). Drop instantáneo. |
-| | `replay_window_seconds` | int | ❌ | Ventana de tiempo para aceptar un knock (Default: 5s). |
+| | `replay_window_seconds` | int | ❌ | Antigüedad y adelanto máximos aceptados (Default: ±5s; rango: 1-3600s). Requiere NTP y reiniciar el daemon para cambiarlo. |
 | | `rate_limit_per_second` | float | ❌ | Paquetes por segundo por IP (Default: 1.0). |
 | **`hooks`** | `pre_execute` | string | ❌ | Script a ejecutar antes de la acción. Bloqueante. |
 | | `on_success` | string | ❌ | Script tras éxito. |

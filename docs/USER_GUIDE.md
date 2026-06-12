@@ -204,7 +204,7 @@ sudo iptables -A INPUT -p udp --dport 3001 -j DROP
 
 ## 4.3. Políticas de Seguridad (Anti-DoS/Anti-Replay)
 
-*   **`replay_window_seconds`**: Ventana de validez del timestamp. Evita que un paquete capturado hoy sea usado mañana.
+*   **`replay_window_seconds`**: Ventana temporal simétrica de 1 a 3600 segundos. El servidor rechaza timestamps anteriores a `now-X` y posteriores a `now+X`; mantén ambos relojes sincronizados mediante NTP. Cambiarla requiere reiniciar el daemon.
 *   **`rate_limit_per_second`**: Token Bucket por IP. Si una IP inunda el puerto, se bloquea *antes* de gastar CPU en criptografía.
 
 ---
@@ -238,8 +238,13 @@ actions:
 
 ## 5.2. Inyección de Parámetros Segura
 Se usa templating de Go (`{{.Params.key}}`) con **Sanitización Estricta**.
-*   **Whitelist:** Solo `a-z`, `A-Z`, `0-9`, `.`, `_`, `-`.
+*   **Nombres:** Deben cumplir `^[A-Za-z_][A-Za-z0-9_]{0,63}$`.
+*   **Valores:** Deben cumplir `^[A-Za-z0-9._][A-Za-z0-9._-]*$` y no pueden ser `..`.
 *   **Anti-Flag Injection:** Los valores NO pueden empezar con `-`.
+*   **Antes de Hooks:** La validación ocurre antes de cualquier hook, log o comando.
+*   **Variables de Entorno:** No se aceptan claves que colisionen al convertirse a mayúsculas.
+*   **2FA:** `otp` es un nombre reservado y nunca se entrega como `GK_PARAM_OTP`.
+*   **Templates:** Usa acceso directo `{{.Params.nombre}}`; los accesos dinámicos con `index` se rechazan.
 
 ```yaml
   "ping-check":
@@ -255,6 +260,10 @@ Oculta secretos en `/var/log/ghostknockd.log`.
     command: "useradd -p {{.Params.pass}} {{.Params.user}}"
     sensitive_params: ["pass"] # Reemplaza 'pass' por '*****' en logs
 ```
+
+Los nombres de `sensitive_params` se comparan sin distinguir mayúsculas. La
+redacción también se aplica a stdout/stderr de comandos y hooks. Los scripts
+de hook deben citar siempre `"$GK_PARAM_NOMBRE"` y no deben usar `eval`.
 
 ## 5.4. Control de Flujo (Timeouts y Reversión)
 

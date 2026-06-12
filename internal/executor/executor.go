@@ -10,7 +10,6 @@ import (
 	"net"
 	"os/exec"
 	"os/user"
-	"regexp"
 	"strconv"
 	"syscall"
 	"text/template"
@@ -18,12 +17,6 @@ import (
 
 	"github.com/soyunomas/ghostknock/internal/config"
 )
-
-// safeParamRegex define la lista blanca de caracteres permitidos en los parámetros.
-var safeParamRegex = regexp.MustCompile(`^[a-zA-Z0-9._][a-zA-Z0-9._-]*$`)
-
-// templateParamRegex encuentra todas las instancias de {{.Params.key}} en una plantilla.
-var templateParamRegex = regexp.MustCompile(`\{\{\.Params\.([a-zA-Z0-9_]+)\}\}`)
 
 // redactParams crea una copia segura de los parámetros, ocultando los sensibles.
 func redactParams(params map[string]string, sensitive []string) map[string]string {
@@ -37,8 +30,8 @@ func redactParams(params map[string]string, sensitive []string) map[string]strin
 	}
 
 	// Censuramos los campos sensibles
-	for _, key := range sensitive {
-		if _, exists := safe[key]; exists {
+	for key := range safe {
+		if isSensitiveParam(key, sensitive) {
 			safe[key] = "*****"
 		}
 	}
@@ -48,16 +41,43 @@ func redactParams(params map[string]string, sensitive []string) map[string]strin
 // Execute procesa una acción, valida sus parámetros, la ejecuta y programa su reversión.
 // MODIFICADO (v2.1): Usa templates pre-compilados en config.Action para evitar parsing runtime.
 func Execute(action config.Action, user string, sourceIP net.IP, params map[string]string, globalHooks config.Hooks, daemonCfg config.Daemon) error {
+	params = cloneParams(params)
+	action.SensitiveParams = append([]string(nil), action.SensitiveParams...)
+
+	if err := ValidateParams(params); err != nil {
+		return err
+	}
+	if err := validateSensitiveParamNames(action.SensitiveParams); err != nil {
+		return err
+	}
+	requiredParams, err := requiredParamsForTemplate(action.CommandTmpl)
+	if err != nil {
+		return fmt.Errorf("template principal inseguro: %w", err)
+	}
+	if err := validateRequiredParams(requiredParams, params); err != nil {
+		return err
+	}
+	if action.RevertCommand != "" {
+		revertRequiredParams, err := requiredParamsForTemplate(action.RevertCommandTmpl)
+		if err != nil {
+			return fmt.Errorf("template de reversión inseguro: %w", err)
+		}
+		if err := validateRequiredParams(revertRequiredParams, params); err != nil {
+			return err
+		}
+	}
+
 	// Usamos una versión sanitizada de los parámetros para el log de debug interno
 	safeParams := redactParams(params, action.SensitiveParams)
 	slog.Debug("Iniciando flujo de ejecución", "user", user, "source_ip", sourceIP.String(), "params", safeParams)
 
 	// --- 1. PREPARAR CONTEXTO DE HOOKS ---
 	hCtx := HookContext{
-		User:     user,
-		ActionID: "unknown_id", // La struct Action actual no tiene el ID, pero el contexto global sí.
-		SourceIP: sourceIP.String(),
-		Params:   params,
+		User:            user,
+		ActionID:        "unknown_id", // La struct Action actual no tiene el ID, pero el contexto global sí.
+		SourceIP:        sourceIP.String(),
+		Params:          params,
+		SensitiveParams: action.SensitiveParams,
 	}
 
 	// --- 2. GLOBAL PRE-HOOK (Bloqueante) ---
@@ -154,12 +174,13 @@ func scheduleRevert(action config.Action, user string, sourceIP net.IP, params m
 	}
 
 	hCtx := HookContext{
-		User:     user,
-		ActionID: "revert_unknown",
-		SourceIP: sourceIP.String(),
-		Params:   params,
-		Status:   status,
-		ErrorMsg: errMsg,
+		User:            user,
+		ActionID:        "revert_unknown",
+		SourceIP:        sourceIP.String(),
+		Params:          params,
+		SensitiveParams: action.SensitiveParams,
+		Status:          status,
+		ErrorMsg:        errMsg,
 	}
 
 	// 1. Action Revert Hook
@@ -179,30 +200,24 @@ func scheduleRevert(action config.Action, user string, sourceIP net.IP, params m
 // MODIFICADO (v2.1): Acepta `tmpl *template.Template` ya compilado.
 // Mantenemos `commandTemplate` string solo para logs y validación de regex.
 func runCommand(commandType, commandTemplate string, tmpl *template.Template, timeoutSeconds int, runAsUser string, sourceIP net.IP, params map[string]string, sensitiveParams []string, shellPath string, shellFlag string) error {
-	
 	if tmpl == nil {
 		return fmt.Errorf("error interno: template no compilado para %s", commandType)
 	}
 
-	// 1. VALIDACIÓN DE SEGURIDAD DE PARÁMETROS (Sanitización Estricta)
-	for key, value := range params {
-		if !safeParamRegex.MatchString(value) {
-			return fmt.Errorf("SEGURIDAD: El valor del parámetro '%s' contiene caracteres inválidos o empieza con un guion. Solo se permiten [a-zA-Z0-9._-] y no puede empezar con '-'", key)
-		}
-		if value == ".." {
-			return fmt.Errorf("SEGURIDAD: Uso de '..' no permitido en parámetros")
-		}
+	// 1. DEFENSA EN PROFUNDIDAD: la validación principal ocurre en Execute,
+	// antes de hooks y logs, pero runCommand también puede usarse internamente.
+	if err := ValidateParams(params); err != nil {
+		return err
 	}
 
-	// 2. VERIFICAR QUE TODOS LOS PARÁMETROS REQUERIDOS EN LA PLANTILLA ESTÁN PRESENTES
-	// Usamos la cadena original para buscar patrones {{.Params.X}}.
-	// Esta es la única operación de regex en tiempo de ejecución que queda, necesaria para seguridad.
-	requiredParams := templateParamRegex.FindAllStringSubmatch(commandTemplate, -1)
-	for _, match := range requiredParams {
-		paramName := match[1] // El primer grupo de captura es el nombre del parámetro.
-		if _, ok := params[paramName]; !ok {
-			return fmt.Errorf("SEGURIDAD: El comando requiere el parámetro '%s', pero no fue proporcionado por el cliente", paramName)
-		}
+	// 2. VERIFICAR PARÁMETROS REQUERIDOS. Execute hace esta comprobación antes
+	// de hooks; se repite aquí como defensa en profundidad.
+	requiredParams, err := requiredParamsForTemplate(tmpl)
+	if err != nil {
+		return fmt.Errorf("template inseguro: %w", err)
+	}
+	if err := validateRequiredParams(requiredParams, params); err != nil {
+		return err
 	}
 
 	// 3. PREPARACIÓN DE DATOS PARA LA PLANTILLA
@@ -271,13 +286,15 @@ func runCommand(commandType, commandTemplate string, tmpl *template.Template, ti
 		"source_ip", sourceIP.String(),
 	)
 
-	err := cmd.Run()
+	err = cmd.Run()
 
-	if stdout.Len() > 0 {
-		slog.Debug("Comando ejecutado (stdout)", "type", commandType, "output", stdout.String())
+	redactedStdout := redactText(stdout.String(), params, sensitiveParams)
+	redactedStderr := redactText(stderr.String(), params, sensitiveParams)
+	if redactedStdout != "" {
+		slog.Debug("Comando ejecutado (stdout)", "type", commandType, "output", redactedStdout)
 	}
-	if stderr.Len() > 0 {
-		slog.Warn("Comando ejecutado (stderr)", "type", commandType, "output", stderr.String())
+	if redactedStderr != "" {
+		slog.Warn("Comando ejecutado (stderr)", "type", commandType, "output", redactedStderr)
 	}
 
 	if err != nil {
@@ -289,7 +306,7 @@ func runCommand(commandType, commandTemplate string, tmpl *template.Template, ti
 			)
 			return fmt.Errorf("el comando excedió el timeout de %d segundos", timeoutSeconds)
 		}
-		return fmt.Errorf("el comando falló: %w. Stderr: %s", err, stderr.String())
+		return fmt.Errorf("el comando falló: %w. Stderr: %s", err, redactedStderr)
 	}
 
 	return nil
